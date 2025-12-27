@@ -1,58 +1,104 @@
-⚠️ Disclaimer
-This is a personal educational project built for a Masterschool graduation project.
+⚠️ DISCLAIMER
 
-It is based on Strudel (https://strudel.cc
-).
-This repository is not affiliated with, endorsed by, or intended as an official extension of Strudel.
+This is a **personal educational project** built as part of a **Masterschool Software & AI Engineering graduation project**.
 
-The project exists solely for learning and experimentation.
+This project is **based on Strudel** (https://strudel.cc), an open-source live-coding music environment originally developed by uzu and contributors.
 
-# strudel
+This repository is **not affiliated with, endorsed by, or intended as an official extension of Strudel**.  
+It exists solely for **learning, experimentation, and research purposes**.
 
-Live coding patterns on the web
-https://strudel.cc/
+---
 
-- Try it here: <https://strudel.cc>
-- Docs: <https://strudel.cc/learn>
-- Technical Blog Post: <https://loophole-letters.vercel.app/strudel>
-- 1 Year of Strudel Blog Post: <https://loophole-letters.vercel.app/strudel1year>
-- 2 Years of Strudel Blog Post: <https://strudel.cc/blog/#year-2>
+# Strudel AI Experiment
 
-## Running Locally
+An **experimental AI copilot sidebar** for browser-based live coding, exploring how Large Language Models (LLMs) can assist creative coding workflows.
 
-After cloning the project, you can run the REPL locally:
+This project investigates how a chat-based AI interface can help with:
+- generating Strudel patterns
+- modifying existing code
+- iterating on musical ideas
+- understanding and refactoring live-coding patterns
 
-1. Install [Node.js](https://nodejs.org/) 18 or newer
-2. Install [pnpm](https://pnpm.io/installation)
-3. Install dependencies by running the following command:
-   ```bash
-   pnpm i
-   ```
-4. Run the development server:
-   ```bash
-   pnpm dev
-   ```
+The AI functionality is intentionally kept **separate from the original Strudel project** and is **not proposed for upstream inclusion**.
 
-## Using Strudel In Your Project
+---
 
-This project is organized into many [packages](./packages), which are also available on [npm](https://www.npmjs.com/search?q=%40strudel).
+## Project Goals
 
-Read more about how to use these in your own project [here](https://strudel.cc/technical-manual/project-start).
+The goal of this project is to explore:
 
-You will need to abide by the terms of the [GNU Affero Public Licence v3](LICENSE). As such, Strudel code can only be shared within free/open source projects under the same license -- see the license for details.
+- AI-assisted creative coding
+- Human–AI collaboration in music tools
+- Safe, controlled integration of LLMs into real-time systems
+- Practical software engineering trade-offs between frontend integration and backend AI services
 
-Licensing info for the default sound banks can be found over on the [dough-samples](https://github.com/felixroos/dough-samples/blob/main/README.md) repository.
+This work is **educational**, not commercial.
 
-## Contributing
+---
 
-There are many ways to contribute to this project! See [contribution guide](./CONTRIBUTING.md). You can find the full list of contributors [here](https://codeberg.org/uzu/strudel/activity/contributors).
+## Architecture Overview
 
-## Community
+The project follows a clean separation of concerns:
 
-There is a #strudel channel on the TidalCycles discord: <https://discord.com/invite/HGEdXmRkzT>
+### Frontend (Strudel Fork – TypeScript)
+- Fork of Strudel for **local experimentation only**
+- Adds a **right-hand sidebar** with a chat interface
+- Reads and updates the Strudel code editor
+- Does **not** modify Strudel’s core musical engine
 
-You can also ask questions and find related discussions on the tidal club forum: <https://club.tidalcycles.org/>
+### Backend (Python – FastAPI)
+- Hosts the AI “copilot” logic
+- Handles:
+  - prompt orchestration
+  - LLM calls
+  - strict output validation (Strudel code only)
+  - undo-safe responses
+- Can be reused independently of Strudel
 
-The discord and forum is shared with the haskell (tidal) and python (vortex) siblings of this project.
+This architecture ensures the AI layer is **decoupled**, reversible, and non-intrusive.
 
-We also have a mastodon account: <a rel="me" href="https://social.toplap.org/@strudel">social.toplap.org/@strudel</a>
+---
+
+## What This Project Is NOT
+
+To avoid any confusion, this project is **not**:
+
+- an official Strudel feature
+- a proposal for adding AI to Strudel upstream
+- a replacement for Strudel
+- a commercial product
+- a maintained fork intended for general users
+
+It is a **personal learning experiment**.
+
+---
+
+## About the Original Strudel Project
+
+**Strudel** is a browser-based live coding environment inspired by TidalCycles, allowing musicians to create and manipulate musical patterns using code.
+
+- Website: https://strudel.cc
+- Try it online: https://strudel.cc
+- Documentation: https://strudel.cc/learn
+- Technical manual: https://strudel.cc/technical-manual/project-start
+- Blog:
+  - https://loophole-letters.vercel.app/strudel
+  - https://loophole-letters.vercel.app/strudel1year
+  - https://strudel.cc/blog/#year-2
+
+Strudel is licensed under the **GNU Affero General Public License v3 (AGPL-3.0)**.
+
+---
+
+## Running This Project Locally
+
+> ⚠️ This setup is intended for **development and learning only**.
+
+### Prerequisites
+- Node.js **18+**
+- pnpm
+
+### Setup
+```bash
+pnpm install
+pnpm dev
