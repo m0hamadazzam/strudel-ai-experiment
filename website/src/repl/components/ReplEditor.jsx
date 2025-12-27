@@ -4,10 +4,7 @@ import { Code } from '@src/repl/components/Code';
 import UserFacingErrorMessage from '@src/repl/components/UserFacingErrorMessage';
 import { Header } from './Header';
 import { useSettings } from '@src/settings.mjs';
-
-// type Props = {
-//  context: replcontext,
-// }
+import AICopilotSidebar from './AICopilotSidebar';
 
 export default function ReplEditor(Props) {
   const { context, ...editorProps } = Props;
@@ -19,11 +16,22 @@ export default function ReplEditor(Props) {
     <div className="h-full flex flex-col relative" {...editorProps}>
       <Loader active={pending} />
       <Header context={context} />
+
+      {/* Main row: editor + existing right panel + AI sidebar */}
       <div className="grow flex relative overflow-hidden">
-        <Code containerRef={containerRef} editorRef={editorRef} init={init} />
+        {/* Editor must be allowed to shrink in flex layouts (critical for CodeMirror) */}
+        <div className="flex-1 min-w-0">
+          <Code containerRef={containerRef} editorRef={editorRef} init={init} />
+        </div>
+
         {!isZen && panelPosition === 'right' && <VerticalPanel context={context} />}
+
+        {/* Your new right sidebar */}
+        {!isZen && <AICopilotSidebar />}
       </div>
+
       <UserFacingErrorMessage error={error} />
+
       {!isZen && panelPosition === 'bottom' && <HorizontalPanel context={context} />}
     </div>
   );
