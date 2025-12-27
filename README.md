@@ -1,3 +1,12 @@
+⚠️ Disclaimer
+This is a personal educational project built for a Masterschool graduation project.
+
+It is based on Strudel (https://strudel.cc
+).
+This repository is not affiliated with, endorsed by, or intended as an official extension of Strudel.
+
+The project exists solely for learning and experimentation.
+
 # strudel
 
 Live coding patterns on the web
