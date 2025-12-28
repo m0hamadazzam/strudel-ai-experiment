@@ -1,16 +1,33 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 export default function AICopilotSidebar() {
     const [input, setInput] = useState('');
     const [messages, setMessages] = useState([]);
+    const textareaRef = useRef(null);
+
+    const autoResizeTextarea = () => {
+        const el = textareaRef.current;
+        if (!el) return;
+
+        el.style.height = 'auto';
+
+        const next = el.scrollHeight;
+        const max = 160; // matches Tailwind max-h-40 (~160px)
+
+        el.style.height = `${Math.min(next, max)}px`;
+        el.style.overflowY = next > max ? 'auto' : 'hidden';
+    };
+
+
 
     const handleInputChange = (e) => {
         setInput(e.target.value);
+        requestAnimationFrame(autoResizeTextarea);
     };
 
     const handleSend = () => {
-        const text = input.trim();
-        if (!text) return;
+        const text = input.trimEnd();
+        if (!text.trim()) return;
 
         const userMsg = { role: 'user', content: text };
         const botMsg = {
@@ -20,7 +37,23 @@ export default function AICopilotSidebar() {
 
         setMessages((prev) => [...prev, userMsg, botMsg]);
         setInput('');
+
+        requestAnimationFrame(() => {
+            const el = textareaRef.current;
+            if (!el) return;
+            el.style.height = 'auto';
+            el.style.overflowY = 'hidden';
+        });
+
     };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    };
+
 
     return (
         <aside className="w-[360px] h-full border-l border-white/10 bg-background text-foreground overflow-auto p-3">
@@ -41,7 +74,7 @@ export default function AICopilotSidebar() {
                             <div
                                 className={
                                     `max-w-[85%] rounded px-2 py-1 
-                                    text-sm ${isUser ?
+                                    text-sm whitespace-pre-wrap ${isUser ?
                                         'bg-white/10' : 'bg-background'
                                     }`
                                 }
@@ -54,21 +87,48 @@ export default function AICopilotSidebar() {
 
 
             </div>
-
-            <div className="flex gap-2">
-                <input
+            <div className="relative">
+                <textarea
+                    ref={textareaRef}
                     value={input}
                     onChange={handleInputChange}
-                    className="flex-1 bg-black/30 text-foreground border border-white/10 rounded px-2 py-1 text-sm outline-none placeholder:text-foreground/40"
+                    onKeyDown={handleKeyDown}
+                    rows={1}
+                    className="
+                        w-full resize-none bg-black/30 text-foreground border
+                        border-white/10 rounded-2xl px-4 pt-3 pb-3 pr-12
+                        text-sm outline-none placeholder:text-foreground/40
+                        overflow-hidden max-h-40
+                    "
                     placeholder="Describe what you want…"
                 />
+
                 <button
                     onClick={handleSend}
-                    className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-sm"
+                    disabled={!input.trim()}
+                    className="
+                        absolute right-2 bottom-3 h-8 w-8 rounded-full
+                        bg-white text-black disabled:opacity-40
+                        disabled:cursor-not-allowed flex items-center
+                        justify-center
+                    "
+                    aria-label="Send"
+                    title="Send"
                 >
-                    Send
+                    <svg
+                        viewBox="0 0 24 24"
+                        className="h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                    >
+                        <path d="M12 19V5" />
+                        <path d="M5 12l7-7 7 7" />
+                    </svg>
                 </button>
             </div>
+
+
         </aside>
     );
 }
