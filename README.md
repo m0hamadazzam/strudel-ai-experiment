@@ -10,6 +10,7 @@ It exists solely for **learning, experimentation, and research purposes**.
 ---
 
 # Strudel AI Experiment
+> A personal learning project exploring AI-assisted live coding — not an official Strudel extension.
 
 An **experimental AI copilot sidebar** for browser-based live coding, exploring how Large Language Models (LLMs) can assist creative coding workflows.
 
@@ -40,13 +41,13 @@ This work is **educational**, not commercial.
 
 The project follows a clean separation of concerns:
 
-### Frontend (Strudel Fork – TypeScript)
+### Frontend (Strudel Fork – JavaScript/JSX + some TypeScript)
 - Fork of Strudel for **local experimentation only**
 - Adds a **right-hand sidebar** with a chat interface
 - Reads and updates the Strudel code editor
 - Does **not** modify Strudel’s core musical engine
 
-### Backend (Python – FastAPI)
+### Backend (planned): (Python – FastAPI)
 - Hosts the AI “copilot” logic
 - Handles:
   - prompt orchestration
@@ -87,6 +88,13 @@ It is a **personal learning experiment**.
   - https://strudel.cc/blog/#year-2
 
 Strudel is licensed under the **GNU Affero General Public License v3 (AGPL-3.0)**.
+
+---
+
+## License
+
+This repository inherits the **AGPL-3.0** license from Strudel.
+All modifications and experiments remain open-source under the same license.
 
 ---
 
