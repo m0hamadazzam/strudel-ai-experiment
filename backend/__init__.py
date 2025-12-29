@@ -1,0 +1,2 @@
+# Strudel AI Copilot Backend
+
