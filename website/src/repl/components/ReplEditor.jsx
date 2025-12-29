@@ -27,7 +27,7 @@ export default function ReplEditor(Props) {
         {!isZen && panelPosition === 'right' && <VerticalPanel context={context} />}
 
         {/* Your new right sidebar */}
-        {!isZen && <AICopilotSidebar />}
+        {!isZen && <AICopilotSidebar context={context} />}
       </div>
 
       <UserFacingErrorMessage error={error} />

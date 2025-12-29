@@ -21,8 +21,15 @@ cp .env.example .env
 # Edit .env with your keys
 ```
 
-4. Run the server:
+4. Run the server (from project root):
 ```bash
+# From the project root directory
+python -m uvicorn backend.main:app --reload --port 8000
+```
+
+Or if running from the backend directory:
+```bash
+cd backend
 uvicorn main:app --reload --port 8000
 ```
 

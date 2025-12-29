@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -6,7 +7,8 @@ from openai import OpenAI
 from .prompts import SYSTEM_PROMPT
 from .schemas import ChatRequest, ChatResponse
 
-load_dotenv()
+backend_dir = Path(__file__).parent
+load_dotenv(backend_dir / ".env")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 

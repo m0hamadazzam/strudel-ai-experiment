@@ -3,11 +3,12 @@ import cx from '@src/cx.mjs';
 import { setAICopilotSidebarWidth, setIsAICopilotSidebarOpened, useSettings } from '@src/settings.mjs';
 import { useEffect, useRef, useState } from 'react';
 
-export default function AICopilotSidebar() {
+export default function AICopilotSidebar({ context }) {
     const settings = useSettings();
     const { isAICopilotSidebarOpen, aiCopilotSidebarWidth } = settings;
     const [input, setInput] = useState('');
     const [messages, setMessages] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
     const textareaRef = useRef(null);
     const [isResizing, setIsResizing] = useState(false);
     const sidebarRef = useRef(null);
@@ -32,18 +33,14 @@ export default function AICopilotSidebar() {
         requestAnimationFrame(autoResizeTextarea);
     };
 
-    const handleSend = () => {
+    const handleSend = async () => {
         const text = input.trimEnd();
-        if (!text.trim()) return;
+        if (!text.trim() || isLoading) return;
 
         const userMsg = { role: 'user', content: text };
-        const botMsg = {
-            role: 'assistant',
-            content: 'Got it. (stub) What do you want to change?'
-        };
-
-        setMessages((prev) => [...prev, userMsg, botMsg]);
+        setMessages((prev) => [...prev, userMsg]);
         setInput('');
+        setIsLoading(true);
 
         requestAnimationFrame(() => {
             const el = textareaRef.current;
@@ -52,6 +49,41 @@ export default function AICopilotSidebar() {
             el.style.overflowY = 'hidden';
         });
 
+        try {
+            const currentCode = context?.activeCode || '';
+            const response = await fetch('http://localhost:8000/api/copilot/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message: text,
+                    current_code: currentCode,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            const botMsg = {
+                role: 'assistant',
+                content: data.code || 'No code generated',
+                code: data.code,
+                needsApproval: true,
+            };
+
+            setMessages((prev) => [...prev, botMsg]);
+        } catch (error) {
+            const errorMsg = {
+                role: 'assistant',
+                content: `Error: ${error.message}`,
+            };
+            setMessages((prev) => [...prev, errorMsg]);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handleKeyDown = (e) => {
@@ -125,6 +157,7 @@ export default function AICopilotSidebar() {
                         <div className="mb-3 space-y-2 flex-1 overflow-auto">
                             {messages.map((msg, index) => {
                                 const isUser = msg.role === 'user';
+                                const needsApproval = msg.needsApproval && msg.code;
 
                                 return (
                                     <div
@@ -143,10 +176,36 @@ export default function AICopilotSidebar() {
                                             }
                                         >
                                             {msg.content}
+                                            {needsApproval && (
+                                                <button
+                                                    onClick={() => {
+                                                        if (context?.editorRef?.current && msg.code) {
+                                                            context.editorRef.current.setCode(msg.code);
+                                                            setMessages((prev) =>
+                                                                prev.map((m, i) =>
+                                                                    i === index
+                                                                        ? { ...m, needsApproval: false }
+                                                                        : m
+                                                                )
+                                                            );
+                                                        }
+                                                    }}
+                                                    className="mt-2 w-full px-3 py-1.5 rounded bg-white text-black text-xs font-medium hover:bg-white/90"
+                                                >
+                                                    Apply code
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 );
                             })}
+                            {isLoading && (
+                                <div className="flex justify-start">
+                                    <div className="max-w-[85%] rounded px-2 py-1 text-sm bg-background">
+                                        <span className="opacity-50">Generating code...</span>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div className="relative">
@@ -167,7 +226,7 @@ export default function AICopilotSidebar() {
 
                             <button
                                 onClick={handleSend}
-                                disabled={!input.trim()}
+                                disabled={!input.trim() || isLoading}
                                 className="
                                 absolute right-2 bottom-3 h-8 w-8 rounded-full
                                 bg-white text-black disabled:opacity-40
