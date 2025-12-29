@@ -44,6 +44,7 @@ export const defaultSettings = {
   isPanelPinned: false,
   isPanelOpen: true,
   togglePanelTrigger: 'click', //click | hover
+  isAICopilotSidebarOpen: true,
   userPatterns: '{}',
   prebakeScript: '',
   audioEngineTarget: audioEngineTargets.webaudio,
@@ -96,6 +97,7 @@ export function useSettings() {
     panelPosition: state.activeFooter !== '' && !isUdels() ? state.panelPosition : 'bottom', // <-- keep this 'bottom' where it is!
     isPanelPinned: parseBoolean(state.isPanelPinned),
     isPanelOpen: parseBoolean(state.isPanelOpen),
+    isAICopilotSidebarOpen: parseBoolean(state.isAICopilotSidebarOpen),
     userPatterns: userPatterns,
     multiChannelOrbits: parseBoolean(state.multiChannelOrbits),
     includePrebakeScriptInShare: parseBoolean(state.includePrebakeScriptInShare),
@@ -110,6 +112,7 @@ export function useSettings() {
 export const setActiveFooter = (tab) => settingsMap.setKey('activeFooter', tab);
 export const setPanelPinned = (bool) => settingsMap.setKey('isPanelPinned', bool);
 export const setIsPanelOpened = (bool) => settingsMap.setKey('isPanelOpen', bool);
+export const setIsAICopilotSidebarOpened = (bool) => settingsMap.setKey('isAICopilotSidebarOpen', bool);
 
 export const storePrebakeScript = (script) => settingsMap.setKey('prebakeScript', script);
 
