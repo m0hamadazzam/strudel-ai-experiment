@@ -91,6 +91,8 @@ export default function AICopilotSidebar() {
         setIsResizing(true);
     };
 
+    const placeholder = aiCopilotSidebarWidth < 300 ? 'Describe…' : 'Describe what you want';
+
     return (
         <nav
             ref={sidebarRef}
@@ -160,7 +162,7 @@ export default function AICopilotSidebar() {
                                 text-sm outline-none placeholder:text-foreground/40
                                 overflow-hidden max-h-40
                             "
-                                placeholder="Describe what you want…"
+                                placeholder={placeholder}
                             />
 
                             <button
