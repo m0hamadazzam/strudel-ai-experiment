@@ -1,18 +1,19 @@
 from datetime import datetime
+from pathlib import Path
+
 from sqlalchemy import (
-    create_engine,
     Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
     Integer,
     String,
     Text,
-    Float,
-    DateTime,
-    ForeignKey,
-    Index,
+    create_engine,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from pathlib import Path
+from sqlalchemy.orm import relationship, sessionmaker
 
 Base = declarative_base()
 
@@ -41,6 +42,12 @@ class Function(Base):
         back_populates="function",
     )
 
+    __table_args__ = (
+        Index("idx_functions_category", "category"),
+        Index("idx_functions_name", "name"),
+        Index("idx_functions_usage", "usage_count"),
+    )
+
 
 class FunctionRelationship(Base):
     __tablename__ = "function_relationships"
@@ -51,7 +58,9 @@ class FunctionRelationship(Base):
     relationship_type = Column(String(50))
     strength = Column(Float, default=1.0)
 
-    function = relationship("Function", foreign_keys=[function_id], back_populates="relationships")
+    function = relationship(
+        "Function", foreign_keys=[function_id], back_populates="relationships"
+    )
 
 
 class Preset(Base):
@@ -84,6 +93,8 @@ class Recipe(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    __table_args__ = (Index("idx_recipes_category", "category"),)
+
 
 class AIContextCache(Base):
     __tablename__ = "ai_context_cache"
@@ -95,6 +106,8 @@ class AIContextCache(Base):
     context_text = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime)
+
+    __table_args__ = (Index("idx_ai_cache_hash", "query_hash"),)
 
 
 class AIInteraction(Base):
@@ -108,6 +121,8 @@ class AIInteraction(Base):
     functions_used = Column(Text)  # JSON array
     response_time_ms = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (Index("idx_ai_interactions_created", "created_at"),)
 
 
 # Database setup
@@ -130,4 +145,3 @@ def get_session():
 def init_database():
     engine = get_engine()
     Base.metadata.create_all(engine)
-
