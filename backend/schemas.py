@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -14,5 +16,10 @@ class ChatResponse(BaseModel):
 class StrudelCodeOut(BaseModel):
     code: str = Field(
         ...,
-        description="Runnable Strudel JavaScript code."
+        min_length=1,
+        description="ONLY runnable Strudel JavaScript. No prose, markdown, or comments.",
+    )
+    explanation: Optional[str] = Field(
+        default=None,
+        description="Optional one-line explanation of what the code does.",
     )

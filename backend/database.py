@@ -131,17 +131,26 @@ def get_database_path():
     return backend_dir / "strudel_kb.db"
 
 
+_engine = None
+_session_factory = None
+
+
 def get_engine():
-    db_path = get_database_path()
-    return create_engine(f"sqlite:///{db_path}", echo=False)
+    global _engine
+    if _engine is None:
+        db_path = get_database_path()
+        _engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    return _engine
 
 
 def get_session():
-    engine = get_engine()
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    return SessionLocal()
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = sessionmaker(
+            autocommit=False, autoflush=False, bind=get_engine()
+        )
+    return _session_factory()
 
 
 def init_database():
-    engine = get_engine()
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
