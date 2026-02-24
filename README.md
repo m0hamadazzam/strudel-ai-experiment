@@ -12,6 +12,8 @@ It exists solely for **learning, experimentation, and research purposes**.
 # Strudel AI Experiment
 > A personal learning project exploring AI-assisted live coding — not an official Strudel extension.
 
+**Quick start:** Run the app with `./start.sh` (backend + frontend). Full setup: **[GETTING_STARTED.md](GETTING_STARTED.md)**.
+
 An **experimental AI copilot sidebar** for browser-based live coding, exploring how Large Language Models (LLMs) can assist creative coding workflows.
 
 This project investigates how a chat-based AI interface can help with:
@@ -102,11 +104,4 @@ All modifications and experiments remain open-source under the same license.
 
 > ⚠️ This setup is intended for **development and learning only**.
 
-### Prerequisites
-- Node.js **18+**
-- pnpm
-
-### Setup
-```bash
-pnpm install
-pnpm dev
+See **[GETTING_STARTED.md](GETTING_STARTED.md)** for prerequisites, one-time setup, and **`./start.sh`** to start backend and frontend with one command.
