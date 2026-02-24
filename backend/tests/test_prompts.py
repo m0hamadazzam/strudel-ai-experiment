@@ -19,14 +19,14 @@ class TestBuildSystemPrompt(unittest.TestCase):
             "only APIs" in prompt or "ONLY functions" in prompt
         )
         self.assertTrue(
-            "retrieved context" in prompt or "Strudel facts" in prompt
+            "Knowledge Base" in prompt or "Strudel facts" in prompt
         )
 
-    def test_with_context_injects_and_restricts(self):
-        context = "Function: stack\nDescription: stacks patterns."
-        prompt = build_system_prompt(context)
-        self.assertIn("Retrieved Knowledge Base Context", prompt)
-        self.assertIn(context, prompt)
+    def test_with_kb_context_injects_and_restricts(self):
+        kb_context = "Function: stack\nDescription: stacks patterns."
+        prompt = build_system_prompt(kb_context=kb_context)
+        self.assertIn("Knowledge Base", prompt)
+        self.assertIn(kb_context, prompt)
         self.assertTrue("use ONLY" in prompt or "ONLY functions" in prompt)
 
     def test_mentions_explanation_field(self):

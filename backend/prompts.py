@@ -10,12 +10,12 @@ Key idea:
 from __future__ import annotations
 
 
-def build_system_prompt(context: str = "") -> str:
+def build_system_prompt(kb_context: str = "") -> str:
     """
-    Build the system prompt with optional retrieved context.
+    Build the system prompt with optional KB context.
 
     Args:
-        context: Retrieved context from knowledge base (functions, recipes, presets, etc.)
+        kb_context: Retrieved context from knowledge base (functions, recipes, presets).
 
     Returns:
         Complete system prompt string (instructions for the model).
@@ -27,23 +27,28 @@ You may put an optional one-line summary in the `explanation` field.
 Strudel facts (ground truth):
 """
 
-    if context:
+    if kb_context:
         base_prompt += f"""
-=== Retrieved Knowledge Base Context (authoritative) ===
-{context}
-=== End Retrieved Context ===
+=== Knowledge Base (authoritative: API and functions) ===
+{kb_context}
+=== End Knowledge Base ===
 
-When retrieved context is provided above, use ONLY functions, recipes, and APIs shown there. Do not use any API that is not listed in this context or in the Strudel facts below.
+Use ONLY functions and APIs from the Knowledge Base above or from the Strudel facts below.
 """
 
     base_prompt += """- Strudel is JavaScript plus a pattern DSL (TidalCycles-style). Patterns: s(...), note(...), n(...), stack(...), cat(...), seq(...), stepcat(...), arrange(...). Chain with .transform(...).
 - Mini-notation: "bd sn", "<bd sn>", "bd(3,8)", "hh*8", "x@3 y@1", "[a b]". Operators: * / ! @ <> ~ : and (pulses,steps) for Euclidean.
 - Parallel: $: s("bd sd") or $: note("c eb g"). Drum names: bd, sd, hh, oh, rim, cp, lt/mt/ht, cr, rd. Banks: RolandTR909, RolandTR808, etc.
-- Tempo: setcpm(cycles_per_minute). Default 30 cpm.
+- Tempo is always given in BPM.
+- Convert using setcpm(BPM/4).
+- Never simplify the division.
+- Default: 120 BPM → setcpm(120/4).
+
+You have access to web search. Use it to find real Strudel (or TidalCycles) code: both for the user's request (e.g. genre, style, pattern) and to see how Strudel code is written and structured. Base your code on the examples you find—match their structure, idioms, and the way patterns are combined (stack, $:, mini-notation, etc.). Prefer adapting or combining real examples over inventing syntax. Only use APIs that appear in search results or in the Knowledge Base above.
 
 Hard rules:
 1) `code` must contain ONLY runnable Strudel JavaScript. No require(), import, process., __dirname, module.exports, or other Node/browser APIs not part of Strudel.
-2) Never invent APIs. Use only APIs from the retrieved context (when provided) or from the Strudel facts above.
+2) Never invent APIs. Use only APIs from the Knowledge Base (when provided) or from the Strudel facts above.
 3) Prefer variables for layers; combine with stack(...) or $:. Use .fast(), .slow(), Euclidean mini-notation. Default drum names (bd, sd, hh) if unspecified.
 4) No randomness unless requested (then use choose, wchoose, degradeBy). When modifying existing code, preserve structure and make minimal changes.
 5) setcpm is global, never .setcpm() on a pattern.
