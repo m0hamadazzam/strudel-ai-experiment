@@ -54,22 +54,22 @@ This will:
 
 ### 4. Verify Setup
 
-The RAG system is now integrated into `copilot.py`. When you make a request:
+The RAG **agent** is integrated into `copilot.py`. When you make a request:
 
-1. The system retrieves relevant context from the vector store
-2. Enhances the system prompt with this context
-3. Generates code using the enhanced prompt
+1. The **agent** (LLM) decides whether to search the knowledge base and with what query
+2. If it calls the KB tool, the **retrieve** node runs and returns formatted context
+3. The **generate_code** node builds the system prompt with that context and calls the LLM with structured output (`StrudelCodeOut`)
+4. The copilot validates the code and returns `ChatResponse`
 
 ## How It Works
 
-### Retrieval Process
+### RAG Agent (LangGraph)
 
 When a user makes a query:
 
-1. **Semantic Search**: The query is embedded and searched against the vector store
-2. **Function Name Extraction**: The system also looks for specific function names mentioned in the query
-3. **Context Assembly**: Relevant functions, recipes, and presets are formatted into context
-4. **Prompt Enhancement**: The context is injected into the system prompt
+1. **Agent node**: The LLM receives the user message and a system prompt instructing it to call `search_strudel_knowledge_base` with a search query when the user asks for code. It may respond with a tool call (retrieve) or go straight to code generation.
+2. **Retrieve node** (if the agent called the tool): Runs the KB tool, which calls `retrieve_relevant_context()` (vector search → hydrate from SQLite → format). The tool result is appended to the conversation.
+3. **Generate_code node**: Reads the conversation (including any tool message with KB context), builds `build_system_prompt(kb_context=...)`, and calls the OpenAI API with structured output to produce `StrudelCodeOut` (code + explanation). Validation runs in `copilot.py` after the graph returns.
 
 ### Vector Store Location
 
@@ -90,8 +90,8 @@ EMBEDDING_MODEL = "text-embedding-3-small"  # or "text-embedding-3-large"
 
 ### Retrieval Parameters
 
-In `backend/copilot.py`, you can adjust:
-- `k=5`: Number of results to retrieve (default: 5)
+In `backend/retrieval.py` (used by the KB tool), you can adjust:
+- `k`: Number of vector results (default: 4)
 - Context limits: Top 3 functions, top 2 recipes, top 2 presets
 
 ## Troubleshooting
@@ -131,21 +131,22 @@ print(f"Found {len(results)} results")
 ```
 User Query
     ↓
-retrieve_relevant_context()  →  Vector Store Search
+Agent node (LLM + search_strudel_knowledge_base tool)
     ↓
-extract_function_names()     →  Direct DB Lookup
+tool_calls? → Yes → Retrieve node (KB tool → retrieve_relevant_context)
+    ↓                    ↓
+    No                   ↓
+    ↓              generate_code node
+    └──────────────────→ (build_system_prompt(kb_context) + structured output)
     ↓
-build_system_prompt(context)  →  Enhanced Prompt
-    ↓
-OpenAI API (gpt-5.1-codex-mini)
-    ↓
-Generated Code
+StrudelCodeOut → Validate → ChatResponse
 ```
 
 ## Files
 
 - `vector_store.py`: Vector store initialization and management
 - `indexing.py`: Script to index knowledge base into vector store
-- `retrieval.py`: Functions to retrieve and format context
-- `prompts.py`: Dynamic prompt building with context injection
-- `copilot.py`: Main generation function with RAG integration
+- `retrieval.py`: Functions to retrieve and format context (used by the KB tool)
+- `rag_agent.py`: LangGraph RAG agent (KB tool, agent/retrieve/generate_code nodes, compiled graph)
+- `prompts.py`: Dynamic prompt building with KB context (used in generate_code node)
+- `copilot.py`: Invokes the RAG graph, validates output, returns ChatResponse
