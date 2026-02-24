@@ -2,7 +2,7 @@
 
 import unittest
 
-from backend.copilot import _query_hash, _validate_generated_code
+from backend.copilot import _validate_generated_code
 
 
 class TestValidateGeneratedCode(unittest.TestCase):
@@ -48,14 +48,3 @@ class TestValidateGeneratedCode(unittest.TestCase):
         allowed = {"s", "note", "fast", "gain"}
         err = _validate_generated_code("s('bd').fast(2).gain(0.8)", allowed_function_names=allowed)
         self.assertIsNone(err)
-
-
-class TestQueryHash(unittest.TestCase):
-    def test_deterministic(self):
-        a = _query_hash("hello", "code1")
-        b = _query_hash("hello", "code1")
-        self.assertEqual(a, b)
-
-    def test_different_inputs_different_hashes(self):
-        self.assertNotEqual(_query_hash("a", ""), _query_hash("b", ""))
-        self.assertNotEqual(_query_hash("a", "x"), _query_hash("a", "y"))
