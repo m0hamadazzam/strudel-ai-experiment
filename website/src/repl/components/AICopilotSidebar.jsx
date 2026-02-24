@@ -67,11 +67,14 @@ export default function AICopilotSidebar({ context }) {
             }
 
             const data = await response.json();
+            const content = data.code
+                ? data.code
+                : (data.explanation || 'No code generated');
             const botMsg = {
                 role: 'assistant',
-                content: data.code || 'No code generated',
-                code: data.code,
-                needsApproval: true,
+                content,
+                code: data.code || '',
+                needsApproval: !!data.code,
             };
 
             setMessages((prev) => [...prev, botMsg]);
