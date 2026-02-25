@@ -284,3 +284,7 @@
   background: rgba(239, 68, 68, 0.15);
   color: #fecaca;
 }
+
+#code .cm-aiPatchToolbar {
+  margin-bottom: 6px;
+}

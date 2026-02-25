@@ -24,6 +24,7 @@ import {
   acceptPatchReviewHunk,
   clearPatchReviewHunks,
   getPatchReviewHunks,
+  getPreviewCodeWithPendingHunks,
   patchReviewExtension,
   rejectPatchReviewHunk,
   setPatchReviewHunks,
@@ -294,7 +295,8 @@ export class StrudelMirror {
     // draw first frame instantly
     await this.prebaked;
     try {
-      await this.repl.evaluate(this.code, false);
+      const codeToRun = getPreviewCodeWithPendingHunks(this.editor) ?? this.code;
+      await this.repl.evaluate(codeToRun, false);
       this.drawer.invalidate(this.repl.scheduler, -0.001);
       // draw at -0.001 to avoid haps at 0 to be visualized as active
       this.onDraw?.(this.drawer.visibleHaps, -0.001, this.drawer.painters);
@@ -304,7 +306,8 @@ export class StrudelMirror {
   }
   async evaluate(autostart = true) {
     this.flash();
-    await this.repl.evaluate(this.code, autostart);
+    const codeToRun = getPreviewCodeWithPendingHunks(this.editor) ?? this.code;
+    await this.repl.evaluate(codeToRun, autostart);
   }
   async stop() {
     this.repl.scheduler.stop();

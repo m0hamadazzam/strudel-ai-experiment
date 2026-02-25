@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "gpt-5.1-codex-mini"
 # Model for the agent node (must support Chat Completions, e.g. gpt-4o-mini)
 DEFAULT_AGENT_MODEL = "gpt-4o-mini"
-MAX_OUTPUT_TOKENS = 3000
+# Must be large enough for full JSON: {"code": "...", "explanation": "..."} without truncation
+MAX_OUTPUT_TOKENS = 8192
 
 _openai_client: Optional[OpenAI] = None
 

@@ -114,12 +114,73 @@ class PatchHunkWidget extends WidgetType {
   }
 }
 
+class PatchReviewToolbarWidget extends WidgetType {
+  eq() {
+    return true;
+  }
+
+  toDOM(view) {
+    const container = document.createElement('div');
+    container.className = 'cm-aiPatchWidget cm-aiPatchToolbar';
+
+    const controls = document.createElement('div');
+    controls.className = 'cm-aiPatchControls';
+
+    const acceptAllBtn = document.createElement('button');
+    acceptAllBtn.className = 'cm-aiPatchButton cm-aiPatchButtonAccept';
+    acceptAllBtn.textContent = 'Accept all';
+    acceptAllBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pending = getPatchReviewHunks(view)
+        .filter((h) => h.status === PENDING)
+        .sort((a, b) => a.start - b.start);
+      for (const h of pending) {
+        const applied = acceptPatchReviewHunk(view, h.id);
+        emitPatchHunkAction(h.id, 'accept', applied);
+      }
+    };
+    controls.appendChild(acceptAllBtn);
+
+    const rejectAllBtn = document.createElement('button');
+    rejectAllBtn.className = 'cm-aiPatchButton cm-aiPatchButtonReject';
+    rejectAllBtn.textContent = 'Reject all';
+    rejectAllBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pending = getPatchReviewHunks(view).filter((h) => h.status === PENDING);
+      for (const h of pending) {
+        const applied = rejectPatchReviewHunk(view, h.id);
+        emitPatchHunkAction(h.id, 'reject', applied);
+      }
+    };
+    controls.appendChild(rejectAllBtn);
+
+    container.appendChild(controls);
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
 function buildPatchReviewDecorations(hunks) {
   const marks = [];
   const ordered = hunks
     .filter((hunk) => hunk.status === PENDING)
     .slice()
     .sort((a, b) => (a.start === b.start ? a.end - b.end : a.start - b.start));
+
+  if (ordered.length > 0) {
+    marks.push(
+      Decoration.widget({
+        widget: new PatchReviewToolbarWidget(),
+        side: -1,
+        block: true,
+      }).range(0),
+    );
+  }
 
   for (const hunk of ordered) {
 
@@ -194,6 +255,24 @@ export function clearPatchReviewHunks(view) {
 export function getPatchReviewHunks(view) {
   const field = view.state.field(patchReviewField, false);
   return field?.hunks || [];
+}
+
+/**
+ * Returns the document with all PENDING hunks applied (preview code), or null if none.
+ * Used so Play/Update can run the proposed changes before the user accepts.
+ */
+export function getPreviewCodeWithPendingHunks(view) {
+  const field = view.state.field(patchReviewField, false);
+  const pending = (field?.hunks || []).filter((h) => h.status === PENDING);
+  if (pending.length === 0) {
+    return null;
+  }
+  let s = view.state.doc.toString();
+  const byStartDesc = pending.slice().sort((a, b) => b.start - a.start);
+  for (const hunk of byStartDesc) {
+    s = s.slice(0, hunk.start) + (hunk.newText || '') + s.slice(hunk.end);
+  }
+  return s;
 }
 
 export function acceptPatchReviewHunk(view, hunkId) {

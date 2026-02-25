@@ -209,23 +209,85 @@ export default function AICopilotSidebar({ context }) {
             return;
         }
 
-        if (activePatchMessageIdRef.current !== messageId) {
+        const wasInactive = activePatchMessageIdRef.current !== messageId;
+        if (wasInactive) {
             const activated = activatePatchMessage(messageId);
             if (!activated) {
                 return;
             }
         }
 
-        const applied = action === 'accept'
-            ? editorInstance.acceptPatchHunk(hunkId)
-            : editorInstance.rejectPatchHunk(hunkId);
+        const tryApply = () => {
+            const applied = action === 'accept'
+                ? editorInstance.acceptPatchHunk(hunkId)
+                : editorInstance.rejectPatchHunk(hunkId);
 
-        if (!applied) {
-            appendAssistantNotice('This hunk could not be applied. The code may have drifted. Ask Copilot again on the latest code.');
+            if (!applied) {
+                appendAssistantNotice('This hunk could not be applied. The code may have drifted. Ask Copilot again on the latest code.');
+                return;
+            }
+
+            applyHunkStatus(hunkId, action === 'accept' ? HUNK_ACCEPTED : HUNK_REJECTED);
+        };
+
+        // If we just activated the patch, defer apply so the editor state is committed first
+        if (wasInactive) {
+            requestAnimationFrame(() => {
+                tryApply();
+            });
+        } else {
+            tryApply();
+        }
+    };
+
+    const handleAllHunksDecision = (messageId, action) => {
+        const editorInstance = context?.editorRef?.current;
+        if (!editorInstance?.acceptPatchHunk || !editorInstance?.rejectPatchHunk) {
+            appendAssistantNotice('Unable to apply hunks because the editor is not ready.');
             return;
         }
 
-        applyHunkStatus(hunkId, action === 'accept' ? HUNK_ACCEPTED : HUNK_REJECTED);
+        const target = messagesRef.current.find((m) => m.id === messageId);
+        if (!target?.hunks?.length) return;
+        const pending = target.hunks.filter((h) => h.status === HUNK_PENDING);
+        if (pending.length === 0) return;
+
+        const wasInactive = activePatchMessageIdRef.current !== messageId;
+        if (wasInactive) {
+            const activated = activatePatchMessage(messageId);
+            if (!activated) return;
+        }
+
+        const tryApplyAll = () => {
+            const pendingIds = target.hunks.filter((h) => h.status === HUNK_PENDING).map((h) => h.id);
+            if (pendingIds.length === 0) return;
+            const sortedForAccept =
+                action === 'accept'
+                    ? target.hunks.filter((h) => h.status === HUNK_PENDING).sort((a, b) => a.start - b.start)
+                    : target.hunks.filter((h) => h.status === HUNK_PENDING);
+            const idsToApply = sortedForAccept.map((h) => h.id);
+            let anyFailed = false;
+            for (const hunkId of idsToApply) {
+                const applied =
+                    action === 'accept'
+                        ? editorInstance.acceptPatchHunk(hunkId)
+                        : editorInstance.rejectPatchHunk(hunkId);
+                if (applied) {
+                    applyHunkStatus(hunkId, action === 'accept' ? HUNK_ACCEPTED : HUNK_REJECTED);
+                } else {
+                    anyFailed = true;
+                }
+            }
+            if (anyFailed) {
+                appendAssistantNotice('Some hunks could not be applied. The code may have drifted.');
+            }
+        };
+
+        if (wasInactive) {
+            requestAnimationFrame(() => tryApplyAll());
+        } else {
+            tryApplyAll();
+        }
     };
 
     const autoResizeTextarea = () => {
@@ -358,14 +420,16 @@ export default function AICopilotSidebar({ context }) {
         }
     }, [messages, activePatchMessageId]);
 
+    const contextRef = useRef(context);
+    contextRef.current = context;
     useEffect(() => {
         return () => {
-            const editorInstance = context?.editorRef?.current;
+            const editorInstance = contextRef.current?.editorRef?.current;
             if (editorInstance?.clearPatchReview) {
                 editorInstance.clearPatchReview();
             }
         };
-    }, [context]);
+    }, []);
 
     useEffect(() => {
         if (!isResizing) return;
@@ -462,12 +526,26 @@ export default function AICopilotSidebar({ context }) {
                                             )}
 
                                             {hasHunks && summary.pending > 0 && (
-                                                <button
-                                                    onClick={() => activatePatchMessage(msg.id)}
-                                                    className="mt-2 w-full px-3 py-1.5 rounded border border-white/20 text-xs font-medium hover:bg-white/10"
-                                                >
-                                                    {isActiveInEditor ? 'Reviewing in editor' : 'Show in editor'}
-                                                </button>
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                    <button
+                                                        onClick={() => activatePatchMessage(msg.id)}
+                                                        className="flex-1 min-w-0 px-3 py-1.5 rounded border border-white/20 text-xs font-medium hover:bg-white/10"
+                                                    >
+                                                        {isActiveInEditor ? 'Reviewing in editor' : 'Show in editor'}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleAllHunksDecision(msg.id, 'accept')}
+                                                        className="flex-1 min-w-0 px-3 py-1.5 rounded bg-white text-black text-xs font-medium hover:bg-white/90"
+                                                    >
+                                                        Accept all
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleAllHunksDecision(msg.id, 'reject')}
+                                                        className="flex-1 min-w-0 px-3 py-1.5 rounded border border-white/20 text-xs font-medium hover:bg-white/10"
+                                                    >
+                                                        Reject all
+                                                    </button>
+                                                </div>
                                             )}
 
                                             {hasHunks && (
