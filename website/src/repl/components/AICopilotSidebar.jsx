@@ -3,6 +3,88 @@ import cx from '@src/cx.mjs';
 import { setAICopilotSidebarWidth, setIsAICopilotSidebarOpened, useSettings } from '@src/settings.mjs';
 import { useEffect, useRef, useState } from 'react';
 
+const MAX_PREVIEW_LINES = 120;
+const MAX_PREVIEW_LINES_PER_OP = 40;
+
+function splitDiffLines(text) {
+    if (!text) return [];
+    const normalized = text.replace(/\r\n/g, '\n');
+    const lines = normalized.split('\n');
+    if (lines[lines.length - 1] === '') {
+        lines.pop();
+    }
+    return lines;
+}
+
+function buildPatchPreview(patchOps) {
+    const previewLines = [];
+    let truncated = false;
+
+    for (const op of patchOps || []) {
+        const removed = splitDiffLines(op.old_text || '');
+        const added = splitDiffLines(op.new_text || '');
+
+        const removedPreview = removed.slice(0, MAX_PREVIEW_LINES_PER_OP);
+        const addedPreview = added.slice(0, MAX_PREVIEW_LINES_PER_OP);
+
+        for (const line of removedPreview) {
+            previewLines.push({ type: 'remove', text: line });
+            if (previewLines.length >= MAX_PREVIEW_LINES) {
+                truncated = true;
+                return { previewLines, truncated };
+            }
+        }
+
+        for (const line of addedPreview) {
+            previewLines.push({ type: 'add', text: line });
+            if (previewLines.length >= MAX_PREVIEW_LINES) {
+                truncated = true;
+                return { previewLines, truncated };
+            }
+        }
+
+        if (removed.length > removedPreview.length || added.length > addedPreview.length) {
+            truncated = true;
+        }
+    }
+
+    return { previewLines, truncated };
+}
+
+function applyPatchToEditor(editorInstance, patchOps) {
+    const editorView = editorInstance?.editor;
+    if (!editorView || !Array.isArray(patchOps) || patchOps.length === 0) {
+        return false;
+    }
+
+    const ordered = [...patchOps].sort((a, b) => a.start - b.start);
+    const baseLength = editorView.state.doc.length;
+    let previousEnd = -1;
+
+    for (const op of ordered) {
+        if (typeof op.start !== 'number' || typeof op.end !== 'number') {
+            return false;
+        }
+        if (op.start < 0 || op.end < op.start || op.end > baseLength) {
+            return false;
+        }
+        if (op.start < previousEnd) {
+            return false;
+        }
+        previousEnd = op.end;
+    }
+
+    editorView.dispatch({
+        changes: ordered.map((op) => ({
+            from: op.start,
+            to: op.end,
+            insert: op.new_text || '',
+        })),
+    });
+
+    return true;
+}
+
 export default function AICopilotSidebar({ context }) {
     const settings = useSettings();
     const { isAICopilotSidebarOpen, aiCopilotSidebarWidth } = settings;
@@ -26,11 +108,68 @@ export default function AICopilotSidebar({ context }) {
         el.style.overflowY = next > max ? 'auto' : 'hidden';
     };
 
-
-
     const handleInputChange = (e) => {
         setInput(e.target.value);
         requestAnimationFrame(autoResizeTextarea);
+    };
+
+    const handleApplyPatch = (index, msg) => {
+        const editorInstance = context?.editorRef?.current;
+        if (!editorInstance) {
+            setMessages((prev) => [
+                ...prev,
+                { role: 'assistant', content: 'Unable to apply patch: editor is not ready.' },
+            ]);
+            return;
+        }
+
+        const liveCode = editorInstance.code ?? context?.activeCode ?? '';
+        if (typeof msg.baseCode === 'string' && liveCode !== msg.baseCode) {
+            setMessages((prev) => [
+                ...prev,
+                {
+                    role: 'assistant',
+                    content: 'Cannot apply this patch because the editor changed since it was generated. Ask Copilot again on the latest code.',
+                },
+            ]);
+            return;
+        }
+
+        let applied = false;
+        if (Array.isArray(msg.patchOps) && msg.patchOps.length > 0) {
+            applied = applyPatchToEditor(editorInstance, msg.patchOps);
+        }
+
+        if (!applied && msg.code) {
+            editorInstance.setCode(msg.code);
+            applied = true;
+        }
+
+        if (!applied) {
+            setMessages((prev) => [
+                ...prev,
+                { role: 'assistant', content: 'No changes to apply.' },
+            ]);
+            return;
+        }
+
+        setMessages((prev) =>
+            prev.map((m, i) =>
+                i === index
+                    ? { ...m, needsApproval: false, applied: true, discarded: false }
+                    : m
+            )
+        );
+    };
+
+    const handleDiscardPatch = (index) => {
+        setMessages((prev) =>
+            prev.map((m, i) =>
+                i === index
+                    ? { ...m, needsApproval: false, applied: false, discarded: true }
+                    : m
+            )
+        );
     };
 
     const handleSend = async () => {
@@ -50,7 +189,7 @@ export default function AICopilotSidebar({ context }) {
         });
 
         try {
-            const currentCode = context?.activeCode || '';
+            const currentCode = context?.editorRef?.current?.code ?? context?.activeCode ?? '';
             const response = await fetch('http://localhost:8000/api/copilot/chat', {
                 method: 'POST',
                 headers: {
@@ -67,14 +206,21 @@ export default function AICopilotSidebar({ context }) {
             }
 
             const data = await response.json();
-            const content = data.code
-                ? data.code
-                : (data.explanation || 'No code generated');
+            const patchOps = Array.isArray(data.patch_ops) ? data.patch_ops : [];
+            const patchStats = data.patch_stats || null;
+            const hasPatch = patchOps.length > 0;
+            const { previewLines, truncated } = buildPatchPreview(patchOps);
+            const content = data.explanation || (hasPatch ? 'Proposed patch ready for review.' : 'No changes suggested.');
             const botMsg = {
                 role: 'assistant',
                 content,
                 code: data.code || '',
-                needsApproval: !!data.code,
+                patchOps,
+                patchStats,
+                previewLines,
+                previewTruncated: truncated,
+                baseCode: currentCode,
+                needsApproval: hasPatch,
             };
 
             setMessages((prev) => [...prev, botMsg]);
@@ -160,7 +306,9 @@ export default function AICopilotSidebar({ context }) {
                         <div className="mb-3 space-y-2 flex-1 overflow-auto">
                             {messages.map((msg, index) => {
                                 const isUser = msg.role === 'user';
-                                const needsApproval = msg.needsApproval && msg.code;
+                                const hasPatch = Array.isArray(msg.patchOps) && msg.patchOps.length > 0;
+                                const needsApproval = msg.needsApproval && (hasPatch || msg.code);
+                                const hasPatchStats = msg.patchStats && typeof msg.patchStats.operations === 'number';
 
                                 return (
                                     <div
@@ -179,24 +327,57 @@ export default function AICopilotSidebar({ context }) {
                                             }
                                         >
                                             {msg.content}
+                                            {hasPatchStats && (
+                                                <div className="mt-2 text-[11px] opacity-70">
+                                                    {`${msg.patchStats.operations} edits · +${msg.patchStats.additions} / -${msg.patchStats.deletions}`}
+                                                </div>
+                                            )}
+                                            {Array.isArray(msg.previewLines) && msg.previewLines.length > 0 && (
+                                                <div className="mt-2 rounded border border-white/10 overflow-hidden font-mono text-[11px]">
+                                                    {msg.previewLines.map((line, lineIndex) => (
+                                                        <div
+                                                            key={`${index}-${lineIndex}`}
+                                                            className={
+                                                                line.type === 'add'
+                                                                    ? 'px-2 py-0.5 bg-emerald-500/10 text-emerald-200'
+                                                                    : 'px-2 py-0.5 bg-red-500/10 text-red-200'
+                                                            }
+                                                        >
+                                                            {(line.type === 'add' ? '+ ' : '- ') + (line.text || ' ')}
+                                                        </div>
+                                                    ))}
+                                                    {msg.previewTruncated && (
+                                                        <div className="px-2 py-1 text-[10px] opacity-60 bg-white/5">
+                                                            Diff preview truncated
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                             {needsApproval && (
-                                                <button
-                                                    onClick={() => {
-                                                        if (context?.editorRef?.current && msg.code) {
-                                                            context.editorRef.current.setCode(msg.code);
-                                                            setMessages((prev) =>
-                                                                prev.map((m, i) =>
-                                                                    i === index
-                                                                        ? { ...m, needsApproval: false }
-                                                                        : m
-                                                                )
-                                                            );
-                                                        }
-                                                    }}
-                                                    className="mt-2 w-full px-3 py-1.5 rounded bg-white text-black text-xs font-medium hover:bg-white/90"
-                                                >
-                                                    Apply code
-                                                </button>
+                                                <div className="mt-2 flex gap-2">
+                                                    <button
+                                                        onClick={() => handleApplyPatch(index, msg)}
+                                                        className="flex-1 px-3 py-1.5 rounded bg-white text-black text-xs font-medium hover:bg-white/90"
+                                                    >
+                                                        Apply patch
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDiscardPatch(index)}
+                                                        className="flex-1 px-3 py-1.5 rounded border border-white/20 text-xs font-medium hover:bg-white/10"
+                                                    >
+                                                        Discard
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {msg.applied && (
+                                                <div className="mt-2 text-[11px] opacity-70">
+                                                    Patch applied
+                                                </div>
+                                            )}
+                                            {msg.discarded && (
+                                                <div className="mt-2 text-[11px] opacity-70">
+                                                    Patch discarded
+                                                </div>
                                             )}
                                         </div>
                                     </div>

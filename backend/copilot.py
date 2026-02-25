@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
 from .database import AIInteraction, Function, get_session
+from .patch_utils import build_patch_operations, summarize_patch_operations
 from .rag_agent import get_rag_graph
 from .schemas import ChatRequest, ChatResponse
 
@@ -35,13 +37,23 @@ _ALLOWED_FUNCTION_NAMES_CACHE: set[str] | None = None
 
 
 def _get_allowed_function_names() -> set[str]:
-    """Return set of all function names in the knowledge base (DB). Cached."""
+    """Return set of all function names and synonyms in the knowledge base (DB). Cached."""
     global _ALLOWED_FUNCTION_NAMES_CACHE
     if _ALLOWED_FUNCTION_NAMES_CACHE is not None:
         return _ALLOWED_FUNCTION_NAMES_CACHE
     session = get_session()
     try:
-        names = {row.name for row in session.query(Function.name).all() if row.name}
+        names: set[str] = set()
+        for row in session.query(Function).all():
+            if row.name:
+                names.add(row.name)
+            if row.synonyms and row.synonyms != "[]":
+                try:
+                    for syn in json.loads(row.synonyms) or []:
+                        if isinstance(syn, str) and syn.strip():
+                            names.add(syn.strip())
+                except (json.JSONDecodeError, TypeError):
+                    pass
         _ALLOWED_FUNCTION_NAMES_CACHE = names
         return names
     finally:
@@ -167,10 +179,16 @@ def generate_code(request: ChatRequest) -> ChatResponse:
                 explanation=err,
             )
 
+        patch_ops = build_patch_operations(request.current_code or "", code)
+        patch_stats = summarize_patch_operations(patch_ops)
+
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         _log_interaction(user_query, code, elapsed_ms)
         return ChatResponse(
-            code=code, explanation=explanation or "Code generated successfully"
+            code=code,
+            explanation=explanation or "Code generated successfully",
+            patch_ops=patch_ops,
+            patch_stats=patch_stats,
         )
 
     except Exception as e:

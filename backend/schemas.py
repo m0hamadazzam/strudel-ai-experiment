@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -8,9 +8,42 @@ class ChatRequest(BaseModel):
     current_code: str = ""
 
 
+class PatchOperation(BaseModel):
+    op: Literal["insert", "delete", "replace"] = Field(
+        ...,
+        description="Patch operation type.",
+    )
+    start: int = Field(
+        ...,
+        ge=0,
+        description="Start character offset (0-based, inclusive) in the base code.",
+    )
+    end: int = Field(
+        ...,
+        ge=0,
+        description="End character offset (0-based, exclusive) in the base code.",
+    )
+    old_text: str = Field(
+        default="",
+        description="Text expected in base code at [start:end].",
+    )
+    new_text: str = Field(
+        default="",
+        description="Replacement text for this range.",
+    )
+
+
+class PatchStats(BaseModel):
+    additions: int = 0
+    deletions: int = 0
+    operations: int = 0
+
+
 class ChatResponse(BaseModel):
     code: str
     explanation: str = ""
+    patch_ops: list[PatchOperation] = Field(default_factory=list)
+    patch_stats: PatchStats = Field(default_factory=PatchStats)
 
 
 class StrudelCodeOut(BaseModel):

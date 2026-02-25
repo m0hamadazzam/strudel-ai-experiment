@@ -8,7 +8,7 @@ FastAPI backend for the Strudel AI Copilot. Exposes the `/api/copilot/chat` endp
 
 ## API
 
-- `POST /api/copilot/chat` – Chat request (message, optional current_code); returns code and explanation.
+- `POST /api/copilot/chat` – Chat request (message, optional current_code); returns generated code, explanation, and patch metadata (`patch_ops`, `patch_stats`) for minimal-apply workflows.
 - `GET /` – Health check.
 
 Requires `OPENAI_API_KEY` in `backend/.env`.
