@@ -20,7 +20,7 @@ export default function ReplEditor(Props) {
       {/* Main row: editor + existing right panel + AI sidebar */}
       <div className="grow flex relative overflow-hidden">
         {/* Editor must be allowed to shrink in flex layouts (critical for CodeMirror) */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
           <Code containerRef={containerRef} editorRef={editorRef} init={init} />
         </div>
 
