@@ -216,3 +216,68 @@
 
 .autocomplete-info-tooltip::-webkit-scrollbar-thumb:hover {
 }
+
+#code .cm-aiPatchRemove {
+  background: rgba(239, 68, 68, 0.22);
+  text-decoration: line-through;
+  text-decoration-color: rgba(248, 113, 113, 0.9);
+  text-decoration-thickness: 2px;
+}
+
+#code .cm-aiPatchWidget {
+  margin: 6px 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 3px solid rgba(16, 185, 129, 0.75);
+  border-radius: 6px;
+  background: rgba(16, 24, 24, 0.9);
+  overflow: hidden;
+  font-family: inherit;
+}
+
+#code .cm-aiPatchWidgetHeader {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  padding: 6px 8px 4px;
+}
+
+#code .cm-aiPatchAddPreview {
+  margin: 0;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(16, 185, 129, 0.12);
+  color: #c7f8df;
+}
+
+#code .cm-aiPatchDeletePreview {
+  padding: 6px 8px;
+  background: rgba(239, 68, 68, 0.14);
+  color: #fecaca;
+  font-size: 12px;
+}
+
+#code .cm-aiPatchControls {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px 8px;
+}
+
+#code .cm-aiPatchButton {
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+#code .cm-aiPatchButtonAccept {
+  background: rgba(16, 185, 129, 0.2);
+  color: #d1fae5;
+}
+
+#code .cm-aiPatchButtonReject {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fecaca;
+}

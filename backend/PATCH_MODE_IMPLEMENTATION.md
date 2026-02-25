@@ -12,11 +12,14 @@ Prevent full-buffer overwrite behavior in the REPL Copilot flow and switch to re
    - `code` (full candidate, backward-compatible)
    - `patch_ops` (minimal operations with character offsets)
    - `patch_stats` (additions/deletions/operation count)
-4. Frontend shows a diff preview (green additions / red deletions).
-5. User can:
-   - `Apply patch`: apply minimal operations to the editor
-   - `Discard`: reject proposed edits
-6. Patch apply is guarded by base-code match to prevent applying stale diffs.
+4. Frontend chat shows hunk-level diff previews (green additions / red deletions).
+5. REPL editor shows inline hunk review UI:
+   - red highlight on code to be replaced/deleted
+   - green preview block for inserted/replacement text
+   - per-hunk `Accept` / `Reject` controls inline in the editor
+6. Chat interface also supports per-hunk `Accept` / `Reject`.
+7. Hunk decisions from chat and editor stay synchronized.
+8. Patch activation is guarded by base-code match to prevent applying stale diffs.
 
 ## API Contract
 
@@ -44,5 +47,5 @@ Prompt now explicitly requires:
 
 1. Add rewrite-threshold policy:
    - if request is additive and deletion ratio is high, trigger a stricter regeneration pass.
-2. Add per-hunk approve/reject (instead of apply-all/discard-all).
+2. Add "accept all pending hunks" and "reject all pending hunks" shortcuts on top of per-hunk controls.
 3. Add backend integration tests for `/api/copilot/chat` patch payload shape.

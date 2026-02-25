@@ -3,8 +3,12 @@ import cx from '@src/cx.mjs';
 import { setAICopilotSidebarWidth, setIsAICopilotSidebarOpened, useSettings } from '@src/settings.mjs';
 import { useEffect, useRef, useState } from 'react';
 
-const MAX_PREVIEW_LINES = 120;
-const MAX_PREVIEW_LINES_PER_OP = 40;
+const MAX_PREVIEW_LINES_PER_HUNK = 40;
+const PATCH_ACTION_EVENT = 'strudel-ai-patch-hunk-action';
+
+const HUNK_PENDING = 'pending';
+const HUNK_ACCEPTED = 'accepted';
+const HUNK_REJECTED = 'rejected';
 
 function splitDiffLines(text) {
     if (!text) return [];
@@ -16,93 +20,221 @@ function splitDiffLines(text) {
     return lines;
 }
 
-function buildPatchPreview(patchOps) {
-    const previewLines = [];
-    let truncated = false;
-
-    for (const op of patchOps || []) {
-        const removed = splitDiffLines(op.old_text || '');
-        const added = splitDiffLines(op.new_text || '');
-
-        const removedPreview = removed.slice(0, MAX_PREVIEW_LINES_PER_OP);
-        const addedPreview = added.slice(0, MAX_PREVIEW_LINES_PER_OP);
-
-        for (const line of removedPreview) {
-            previewLines.push({ type: 'remove', text: line });
-            if (previewLines.length >= MAX_PREVIEW_LINES) {
-                truncated = true;
-                return { previewLines, truncated };
-            }
-        }
-
-        for (const line of addedPreview) {
-            previewLines.push({ type: 'add', text: line });
-            if (previewLines.length >= MAX_PREVIEW_LINES) {
-                truncated = true;
-                return { previewLines, truncated };
-            }
-        }
-
-        if (removed.length > removedPreview.length || added.length > addedPreview.length) {
-            truncated = true;
-        }
+function summarizeHunks(hunks) {
+    const summary = { pending: 0, accepted: 0, rejected: 0 };
+    for (const hunk of hunks || []) {
+        if (hunk.status === HUNK_ACCEPTED) summary.accepted += 1;
+        else if (hunk.status === HUNK_REJECTED) summary.rejected += 1;
+        else summary.pending += 1;
     }
-
-    return { previewLines, truncated };
+    return summary;
 }
 
-function applyPatchToEditor(editorInstance, patchOps) {
-    const editorView = editorInstance?.editor;
-    if (!editorView || !Array.isArray(patchOps) || patchOps.length === 0) {
-        return false;
+function buildHunkPreview(hunk) {
+    const removed = splitDiffLines(hunk.oldText || '');
+    const added = splitDiffLines(hunk.newText || '');
+
+    const removedPreview = removed.slice(0, MAX_PREVIEW_LINES_PER_HUNK);
+    const addedPreview = added.slice(0, MAX_PREVIEW_LINES_PER_HUNK);
+
+    const lines = [
+        ...removedPreview.map((text) => ({ type: 'remove', text })),
+        ...addedPreview.map((text) => ({ type: 'add', text })),
+    ];
+
+    const truncated = removed.length > removedPreview.length || added.length > addedPreview.length;
+    return { lines, truncated };
+}
+
+function buildPatchHunks(messageId, patchOps) {
+    return (patchOps || []).map((op, index) => ({
+        id: `${messageId}-hunk-${index + 1}`,
+        op: op.op || 'replace',
+        start: op.start,
+        end: op.end,
+        oldText: op.old_text || '',
+        newText: op.new_text || '',
+        status: HUNK_PENDING,
+    }));
+}
+
+function findLatestPendingPatchMessage(messages) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (Array.isArray(message.hunks) && message.hunks.some((hunk) => hunk.status === HUNK_PENDING)) {
+            return message;
+        }
+    }
+    return null;
+}
+
+function updateMessageAfterHunkDecision(message, hunkId, nextStatus) {
+    if (!Array.isArray(message.hunks)) {
+        return message;
     }
 
-    const ordered = [...patchOps].sort((a, b) => a.start - b.start);
-    const baseLength = editorView.state.doc.length;
-    let previousEnd = -1;
-
-    for (const op of ordered) {
-        if (typeof op.start !== 'number' || typeof op.end !== 'number') {
-            return false;
+    let changed = false;
+    const hunks = message.hunks.map((hunk) => {
+        if (hunk.id !== hunkId || hunk.status !== HUNK_PENDING) {
+            return hunk;
         }
-        if (op.start < 0 || op.end < op.start || op.end > baseLength) {
-            return false;
-        }
-        if (op.start < previousEnd) {
-            return false;
-        }
-        previousEnd = op.end;
-    }
-
-    editorView.dispatch({
-        changes: ordered.map((op) => ({
-            from: op.start,
-            to: op.end,
-            insert: op.new_text || '',
-        })),
+        changed = true;
+        return { ...hunk, status: nextStatus };
     });
 
-    return true;
+    if (!changed) {
+        return message;
+    }
+
+    const summary = summarizeHunks(hunks);
+    return {
+        ...message,
+        hunks,
+        needsApproval: summary.pending > 0,
+        applied: summary.pending === 0 && summary.accepted > 0,
+        discarded: summary.pending === 0 && summary.accepted === 0 && summary.rejected > 0,
+    };
 }
 
 export default function AICopilotSidebar({ context }) {
     const settings = useSettings();
     const { isAICopilotSidebarOpen, aiCopilotSidebarWidth } = settings;
+
     const [input, setInput] = useState('');
     const [messages, setMessages] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
-    const textareaRef = useRef(null);
     const [isResizing, setIsResizing] = useState(false);
+    const [activePatchMessageId, setActivePatchMessageId] = useState(null);
+
+    const textareaRef = useRef(null);
     const sidebarRef = useRef(null);
+    const messageCounterRef = useRef(0);
+    const messagesRef = useRef(messages);
+    const activePatchMessageIdRef = useRef(activePatchMessageId);
+    const applyHunkStatusRef = useRef(() => {});
+    const appendAssistantNoticeRef = useRef(() => {});
+
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
+
+    useEffect(() => {
+        activePatchMessageIdRef.current = activePatchMessageId;
+    }, [activePatchMessageId]);
+
+    const nextMessageId = () => {
+        messageCounterRef.current += 1;
+        return `msg-${messageCounterRef.current}`;
+    };
+
+    const updateMessages = (updater) => {
+        setMessages((prev) => {
+            const next = typeof updater === 'function' ? updater(prev) : updater;
+            messagesRef.current = next;
+            return next;
+        });
+    };
+
+    const getLiveCode = () => context?.editorRef?.current?.code ?? context?.activeCode ?? '';
+
+    const appendAssistantNotice = (content) => {
+        updateMessages((prev) => [
+            ...prev,
+            {
+                id: nextMessageId(),
+                role: 'assistant',
+                content,
+            },
+        ]);
+    };
+
+    const clearPatchReviewInEditor = () => {
+        const editorInstance = context?.editorRef?.current;
+        if (editorInstance?.clearPatchReview) {
+            editorInstance.clearPatchReview();
+        }
+        setActivePatchMessageId(null);
+    };
+
+    const activatePatchMessage = (messageId, messagesSnapshot = messagesRef.current, silent = false) => {
+        const editorInstance = context?.editorRef?.current;
+        if (!editorInstance?.setPatchReview) {
+            if (!silent) {
+                appendAssistantNotice('Editor patch preview is not available right now.');
+            }
+            return false;
+        }
+
+        const target = messagesSnapshot.find((message) => message.id === messageId);
+        if (!target || !Array.isArray(target.hunks)) {
+            return false;
+        }
+
+        const pendingHunks = target.hunks.filter((hunk) => hunk.status === HUNK_PENDING);
+        if (pendingHunks.length === 0) {
+            if (activePatchMessageIdRef.current === messageId) {
+                clearPatchReviewInEditor();
+            }
+            return false;
+        }
+
+        if (activePatchMessageIdRef.current !== messageId) {
+            const liveCode = getLiveCode();
+            if (typeof target.baseCode === 'string' && liveCode !== target.baseCode) {
+                if (!silent) {
+                    appendAssistantNotice('Cannot review this patch in editor because the code changed since it was generated.');
+                }
+                return false;
+            }
+        }
+
+        editorInstance.setPatchReview(pendingHunks);
+        setActivePatchMessageId(messageId);
+        return true;
+    };
+
+    const applyHunkStatus = (hunkId, nextStatus) => {
+        updateMessages((prev) => prev.map((message) => updateMessageAfterHunkDecision(message, hunkId, nextStatus)));
+    };
+
+    useEffect(() => {
+        applyHunkStatusRef.current = applyHunkStatus;
+        appendAssistantNoticeRef.current = appendAssistantNotice;
+    });
+
+    const handleHunkDecision = (messageId, hunkId, action) => {
+        const editorInstance = context?.editorRef?.current;
+        if (!editorInstance?.acceptPatchHunk || !editorInstance?.rejectPatchHunk) {
+            appendAssistantNotice('Unable to apply this hunk because the editor is not ready.');
+            return;
+        }
+
+        if (activePatchMessageIdRef.current !== messageId) {
+            const activated = activatePatchMessage(messageId);
+            if (!activated) {
+                return;
+            }
+        }
+
+        const applied = action === 'accept'
+            ? editorInstance.acceptPatchHunk(hunkId)
+            : editorInstance.rejectPatchHunk(hunkId);
+
+        if (!applied) {
+            appendAssistantNotice('This hunk could not be applied. The code may have drifted. Ask Copilot again on the latest code.');
+            return;
+        }
+
+        applyHunkStatus(hunkId, action === 'accept' ? HUNK_ACCEPTED : HUNK_REJECTED);
+    };
 
     const autoResizeTextarea = () => {
         const el = textareaRef.current;
         if (!el) return;
 
         el.style.height = 'auto';
-
         const next = el.scrollHeight;
-        const max = 160; // matches Tailwind max-h-40 (~160px)
+        const max = 160;
 
         el.style.height = `${Math.min(next, max)}px`;
         el.style.overflowY = next > max ? 'auto' : 'hidden';
@@ -113,71 +245,11 @@ export default function AICopilotSidebar({ context }) {
         requestAnimationFrame(autoResizeTextarea);
     };
 
-    const handleApplyPatch = (index, msg) => {
-        const editorInstance = context?.editorRef?.current;
-        if (!editorInstance) {
-            setMessages((prev) => [
-                ...prev,
-                { role: 'assistant', content: 'Unable to apply patch: editor is not ready.' },
-            ]);
-            return;
-        }
-
-        const liveCode = editorInstance.code ?? context?.activeCode ?? '';
-        if (typeof msg.baseCode === 'string' && liveCode !== msg.baseCode) {
-            setMessages((prev) => [
-                ...prev,
-                {
-                    role: 'assistant',
-                    content: 'Cannot apply this patch because the editor changed since it was generated. Ask Copilot again on the latest code.',
-                },
-            ]);
-            return;
-        }
-
-        let applied = false;
-        if (Array.isArray(msg.patchOps) && msg.patchOps.length > 0) {
-            applied = applyPatchToEditor(editorInstance, msg.patchOps);
-        }
-
-        if (!applied && msg.code) {
-            editorInstance.setCode(msg.code);
-            applied = true;
-        }
-
-        if (!applied) {
-            setMessages((prev) => [
-                ...prev,
-                { role: 'assistant', content: 'No changes to apply.' },
-            ]);
-            return;
-        }
-
-        setMessages((prev) =>
-            prev.map((m, i) =>
-                i === index
-                    ? { ...m, needsApproval: false, applied: true, discarded: false }
-                    : m
-            )
-        );
-    };
-
-    const handleDiscardPatch = (index) => {
-        setMessages((prev) =>
-            prev.map((m, i) =>
-                i === index
-                    ? { ...m, needsApproval: false, applied: false, discarded: true }
-                    : m
-            )
-        );
-    };
-
     const handleSend = async () => {
         const text = input.trimEnd();
         if (!text.trim() || isLoading) return;
 
-        const userMsg = { role: 'user', content: text };
-        setMessages((prev) => [...prev, userMsg]);
+        updateMessages((prev) => [...prev, { id: nextMessageId(), role: 'user', content: text }]);
         setInput('');
         setIsLoading(true);
 
@@ -189,7 +261,7 @@ export default function AICopilotSidebar({ context }) {
         });
 
         try {
-            const currentCode = context?.editorRef?.current?.code ?? context?.activeCode ?? '';
+            const currentCode = getLiveCode();
             const response = await fetch('http://localhost:8000/api/copilot/chat', {
                 method: 'POST',
                 headers: {
@@ -206,30 +278,31 @@ export default function AICopilotSidebar({ context }) {
             }
 
             const data = await response.json();
+            const messageId = nextMessageId();
             const patchOps = Array.isArray(data.patch_ops) ? data.patch_ops : [];
-            const patchStats = data.patch_stats || null;
-            const hasPatch = patchOps.length > 0;
-            const { previewLines, truncated } = buildPatchPreview(patchOps);
-            const content = data.explanation || (hasPatch ? 'Proposed patch ready for review.' : 'No changes suggested.');
+            const hunks = buildPatchHunks(messageId, patchOps);
             const botMsg = {
+                id: messageId,
                 role: 'assistant',
-                content,
+                content: data.explanation || (hunks.length > 0 ? 'Proposed patch ready for review.' : 'No changes suggested.'),
                 code: data.code || '',
-                patchOps,
-                patchStats,
-                previewLines,
-                previewTruncated: truncated,
+                patchStats: data.patch_stats || null,
                 baseCode: currentCode,
-                needsApproval: hasPatch,
+                hunks,
+                needsApproval: hunks.length > 0,
+                applied: false,
+                discarded: false,
             };
 
-            setMessages((prev) => [...prev, botMsg]);
+            updateMessages((prev) => [...prev, botMsg]);
+
+            if (hunks.length > 0) {
+                requestAnimationFrame(() => {
+                    activatePatchMessage(botMsg.id, messagesRef.current, true);
+                });
+            }
         } catch (error) {
-            const errorMsg = {
-                role: 'assistant',
-                content: `Error: ${error.message}`,
-            };
-            setMessages((prev) => [...prev, errorMsg]);
+            appendAssistantNotice(`Error: ${error.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -241,6 +314,58 @@ export default function AICopilotSidebar({ context }) {
             handleSend();
         }
     };
+
+    useEffect(() => {
+        const handlePatchActionFromEditor = (event) => {
+            const detail = event?.detail || {};
+            if (detail.source !== 'editor' || !detail.hunkId || !detail.action) {
+                return;
+            }
+
+            if (!detail.applied && detail.action === 'accept') {
+                appendAssistantNoticeRef.current('A hunk failed to apply in the editor. The code may have changed.');
+                return;
+            }
+
+            applyHunkStatusRef.current(
+                detail.hunkId,
+                detail.action === 'accept' ? HUNK_ACCEPTED : HUNK_REJECTED,
+            );
+        };
+
+        window.addEventListener(PATCH_ACTION_EVENT, handlePatchActionFromEditor);
+        return () => {
+            window.removeEventListener(PATCH_ACTION_EVENT, handlePatchActionFromEditor);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!activePatchMessageId) {
+            return;
+        }
+
+        const activeMessage = messages.find((message) => message.id === activePatchMessageId);
+        const hasPending = !!activeMessage?.hunks?.some((hunk) => hunk.status === HUNK_PENDING);
+        if (hasPending) {
+            return;
+        }
+
+        const nextPending = findLatestPendingPatchMessage(messages);
+        if (nextPending) {
+            activatePatchMessage(nextPending.id, messages, true);
+        } else {
+            clearPatchReviewInEditor();
+        }
+    }, [messages, activePatchMessageId]);
+
+    useEffect(() => {
+        return () => {
+            const editorInstance = context?.editorRef?.current;
+            if (editorInstance?.clearPatchReview) {
+                editorInstance.clearPatchReview();
+            }
+        };
+    }, [context]);
 
     useEffect(() => {
         if (!isResizing) return;
@@ -304,71 +429,112 @@ export default function AICopilotSidebar({ context }) {
                         </div>
 
                         <div className="mb-3 space-y-2 flex-1 overflow-auto">
-                            {messages.map((msg, index) => {
+                            {messages.map((msg) => {
                                 const isUser = msg.role === 'user';
-                                const hasPatch = Array.isArray(msg.patchOps) && msg.patchOps.length > 0;
-                                const needsApproval = msg.needsApproval && (hasPatch || msg.code);
-                                const hasPatchStats = msg.patchStats && typeof msg.patchStats.operations === 'number';
+                                const hasHunks = Array.isArray(msg.hunks) && msg.hunks.length > 0;
+                                const summary = hasHunks ? summarizeHunks(msg.hunks) : null;
+                                const isActiveInEditor = activePatchMessageId === msg.id;
 
                                 return (
                                     <div
-                                        key={index}
-                                        className={
-                                            `flex ${isUser ?
-                                                'justify-end' : 'justify-start'}`
-                                        }
+                                        key={msg.id}
+                                        className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
                                     >
                                         <div
                                             className={
-                                                `max-w-[85%] rounded px-2 py-1 
-                                            text-sm whitespace-pre-wrap ${isUser ?
+                                                `max-w-[85%] rounded px-2 py-1 text-sm whitespace-pre-wrap ${isUser ?
                                                     'bg-white/10' : 'bg-background'
                                                 }`
                                             }
                                         >
                                             {msg.content}
-                                            {hasPatchStats && (
+
+                                            {msg.patchStats && (
                                                 <div className="mt-2 text-[11px] opacity-70">
                                                     {`${msg.patchStats.operations} edits · +${msg.patchStats.additions} / -${msg.patchStats.deletions}`}
                                                 </div>
                                             )}
-                                            {Array.isArray(msg.previewLines) && msg.previewLines.length > 0 && (
-                                                <div className="mt-2 rounded border border-white/10 overflow-hidden font-mono text-[11px]">
-                                                    {msg.previewLines.map((line, lineIndex) => (
-                                                        <div
-                                                            key={`${index}-${lineIndex}`}
-                                                            className={
-                                                                line.type === 'add'
-                                                                    ? 'px-2 py-0.5 bg-emerald-500/10 text-emerald-200'
-                                                                    : 'px-2 py-0.5 bg-red-500/10 text-red-200'
-                                                            }
-                                                        >
-                                                            {(line.type === 'add' ? '+ ' : '- ') + (line.text || ' ')}
-                                                        </div>
-                                                    ))}
-                                                    {msg.previewTruncated && (
-                                                        <div className="px-2 py-1 text-[10px] opacity-60 bg-white/5">
-                                                            Diff preview truncated
-                                                        </div>
-                                                    )}
+
+                                            {summary && (
+                                                <div className="mt-2 text-[11px] opacity-70">
+                                                    {`Pending ${summary.pending} · Accepted ${summary.accepted} · Rejected ${summary.rejected}`}
                                                 </div>
                                             )}
-                                            {needsApproval && (
-                                                <div className="mt-2 flex gap-2">
-                                                    <button
-                                                        onClick={() => handleApplyPatch(index, msg)}
-                                                        className="flex-1 px-3 py-1.5 rounded bg-white text-black text-xs font-medium hover:bg-white/90"
-                                                    >
-                                                        Apply patch
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleDiscardPatch(index)}
-                                                        className="flex-1 px-3 py-1.5 rounded border border-white/20 text-xs font-medium hover:bg-white/10"
-                                                    >
-                                                        Discard
-                                                    </button>
+
+                                            {hasHunks && summary.pending > 0 && (
+                                                <button
+                                                    onClick={() => activatePatchMessage(msg.id)}
+                                                    className="mt-2 w-full px-3 py-1.5 rounded border border-white/20 text-xs font-medium hover:bg-white/10"
+                                                >
+                                                    {isActiveInEditor ? 'Reviewing in editor' : 'Show in editor'}
+                                                </button>
+                                            )}
+
+                                            {hasHunks && (
+                                                <div className="mt-2 space-y-2">
+                                                    {msg.hunks.map((hunk, hunkIndex) => {
+                                                        const preview = buildHunkPreview(hunk);
+                                                        const isPending = hunk.status === HUNK_PENDING;
+                                                        const statusLabel = isPending
+                                                            ? 'Pending'
+                                                            : hunk.status === HUNK_ACCEPTED
+                                                                ? 'Accepted'
+                                                                : 'Rejected';
+
+                                                        return (
+                                                            <div
+                                                                key={hunk.id}
+                                                                className="rounded border border-white/10 overflow-hidden"
+                                                            >
+                                                                <div className="px-2 py-1 text-[11px] opacity-70 bg-white/5">
+                                                                    {`Hunk ${hunkIndex + 1} · ${hunk.op} · ${statusLabel}`}
+                                                                </div>
+
+                                                                {preview.lines.length > 0 && (
+                                                                    <div className="font-mono text-[11px]">
+                                                                        {preview.lines.map((line, lineIndex) => (
+                                                                            <div
+                                                                                key={`${hunk.id}-${lineIndex}`}
+                                                                                className={
+                                                                                    line.type === 'add'
+                                                                                        ? 'px-2 py-0.5 bg-emerald-500/10 text-emerald-200'
+                                                                                        : 'px-2 py-0.5 bg-red-500/10 text-red-200'
+                                                                                }
+                                                                            >
+                                                                                {(line.type === 'add' ? '+ ' : '- ') + (line.text || ' ')}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+
+                                                                {preview.truncated && (
+                                                                    <div className="px-2 py-1 text-[10px] opacity-60 bg-white/5">
+                                                                        Hunk preview truncated
+                                                                    </div>
+                                                                )}
+
+                                                                {isPending && (
+                                                                    <div className="p-2 flex gap-2">
+                                                                        <button
+                                                                            onClick={() => handleHunkDecision(msg.id, hunk.id, 'accept')}
+                                                                            className="flex-1 px-3 py-1.5 rounded bg-white text-black text-xs font-medium hover:bg-white/90"
+                                                                        >
+                                                                            Accept
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => handleHunkDecision(msg.id, hunk.id, 'reject')}
+                                                                            className="flex-1 px-3 py-1.5 rounded border border-white/20 text-xs font-medium hover:bg-white/10"
+                                                                        >
+                                                                            Reject
+                                                                        </button>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
                                                 </div>
                                             )}
+
                                             {msg.applied && (
                                                 <div className="mt-2 text-[11px] opacity-70">
                                                     Patch applied
@@ -383,6 +549,7 @@ export default function AICopilotSidebar({ context }) {
                                     </div>
                                 );
                             })}
+
                             {isLoading && (
                                 <div className="flex justify-start">
                                     <div className="max-w-[85%] rounded px-2 py-1 text-sm bg-background">

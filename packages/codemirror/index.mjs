@@ -4,3 +4,4 @@ export * from './flash.mjs';
 export * from './slider.mjs';
 export * from './themes.mjs';
 export * from './widget.mjs';
+export * from './patchReview.mjs';

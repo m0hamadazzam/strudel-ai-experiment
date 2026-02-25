@@ -20,6 +20,14 @@ import { basicSetup } from './basicSetup.mjs';
 import { flash, isFlashEnabled } from './flash.mjs';
 import { highlightMiniLocations, isPatternHighlightingEnabled, updateMiniLocations } from './highlight.mjs';
 import { keybindings } from './keybindings.mjs';
+import {
+  acceptPatchReviewHunk,
+  clearPatchReviewHunks,
+  getPatchReviewHunks,
+  patchReviewExtension,
+  rejectPatchReviewHunk,
+  setPatchReviewHunks,
+} from './patchReview.mjs';
 import { sliderPlugin, updateSliderWidgets } from './slider.mjs';
 import { activateTheme, initTheme, theme } from './themes.mjs';
 import { isTooltipEnabled } from './tooltip.mjs';
@@ -100,6 +108,7 @@ export function initEditor({ initialCode = '', onChange, onEvaluate, onStop, roo
       syntaxHighlighting(defaultHighlightStyle),
       EditorView.updateListener.of((v) => onChange(v)),
       drawSelection({ cursorBlinkRate: 0 }),
+      patchReviewExtension,
       Prec.highest(
         keymap.of([
           {
@@ -408,6 +417,21 @@ export class StrudelMirror {
     const cursor = this.getCursorLocation();
     this.setCode(this.code + code);
     this.setCursorLocation(cursor);
+  }
+  setPatchReview(hunks) {
+    setPatchReviewHunks(this.editor, hunks);
+  }
+  clearPatchReview() {
+    clearPatchReviewHunks(this.editor);
+  }
+  getPatchReviewHunks() {
+    return getPatchReviewHunks(this.editor);
+  }
+  acceptPatchHunk(hunkId) {
+    return acceptPatchReviewHunk(this.editor, hunkId);
+  }
+  rejectPatchHunk(hunkId) {
+    return rejectPatchReviewHunk(this.editor, hunkId);
   }
 }
 
