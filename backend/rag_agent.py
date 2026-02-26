@@ -46,6 +46,7 @@ def _get_openai_client() -> OpenAI:
 
 # --- KB tool ---
 
+
 def _search_strudel_kb_impl(query: str) -> str:
     """Search the Strudel knowledge base; used by the LangChain tool."""
     extra = extract_function_names_from_query(query)
@@ -64,11 +65,13 @@ def search_strudel_knowledge_base(query: str) -> str:
     return _search_strudel_kb_impl(query)
 
 
-# --- State: messages (with reducer) + optional parsed_output ---
+# --- State: messages (with reducer) + optional parsed_output + usage ---
+
 
 class RAGAgentState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     parsed_output: Optional[StrudelCodeOut]
+    usage: Optional[dict]
 
 
 # --- Agent system message (instructs: call KB tool with search query, do not generate code here) ---
@@ -77,6 +80,7 @@ AGENT_SYSTEM_PROMPT = """You are a Strudel.cc live-coding assistant. When the us
 
 
 # --- Nodes ---
+
 
 def _get_chat_model() -> ChatOpenAI:
     """Chat model for the agent node; must support v1/chat/completions (e.g. gpt-4o-mini)."""
@@ -117,8 +121,9 @@ def generate_code_node(state: RAGAgentState) -> dict:
 
     system_prompt = build_system_prompt(kb_context=kb_context)
     client = _get_openai_client()
-    try:
-        resp = client.responses.parse(
+
+    def _do_parse():
+        return client.responses.parse(
             model=os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
             tools=[
                 {
@@ -140,6 +145,20 @@ def generate_code_node(state: RAGAgentState) -> dict:
             text_format=StrudelCodeOut,
             max_output_tokens=MAX_OUTPUT_TOKENS,
         )
+
+    try:
+        if os.getenv("LANGFUSE_SECRET_KEY"):
+            try:
+                from langfuse import get_client
+
+                with get_client().start_as_current_observation(
+                    as_type="span", name="generate_code.responses_parse"
+                ):
+                    resp = _do_parse()
+            except Exception:
+                resp = _do_parse()
+        else:
+            resp = _do_parse()
     except Exception as e:
         logger.warning("Structured parse failed: %s", e)
         return {"parsed_output": None}
@@ -147,10 +166,20 @@ def generate_code_node(state: RAGAgentState) -> dict:
     parsed = resp.output_parsed
     if parsed is None:
         return {"parsed_output": None}
-    return {"parsed_output": parsed}
+
+    usage_dict: Optional[dict] = None
+    if getattr(resp, "usage", None) is not None:
+        u = resp.usage
+        usage_dict = {
+            "input_tokens": getattr(u, "input_tokens", 0) or 0,
+            "output_tokens": getattr(u, "output_tokens", 0) or 0,
+            "total_tokens": getattr(u, "total_tokens", 0) or 0,
+        }
+    return {"parsed_output": parsed, "usage": usage_dict}
 
 
 # --- Graph assembly ---
+
 
 def build_rag_graph() -> StateGraph:
     workflow = StateGraph(RAGAgentState)

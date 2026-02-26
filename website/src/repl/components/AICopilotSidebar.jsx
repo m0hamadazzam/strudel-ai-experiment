@@ -58,6 +58,20 @@ function buildPatchHunks(messageId, patchOps) {
     }));
 }
 
+function formatTokens(n) {
+    if (n == null || typeof n !== 'number' || Number.isNaN(n)) return '0';
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+    return String(n);
+}
+
+function formatCost(cost) {
+    if (cost == null || typeof cost !== 'number' || Number.isNaN(cost) || cost < 0) return null;
+    if (cost >= 0.01) return `~$${cost.toFixed(2)}`;
+    if (cost > 0) return `~$${cost.toFixed(4)}`;
+    return '~$0.00';
+}
+
 function findLatestPendingPatchMessage(messages) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
         const message = messages[i];
@@ -105,6 +119,12 @@ export default function AICopilotSidebar({ context }) {
     const [isLoading, setIsLoading] = useState(false);
     const [isResizing, setIsResizing] = useState(false);
     const [activePatchMessageId, setActivePatchMessageId] = useState(null);
+    const [sessionUsage, setSessionUsage] = useState({
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        estimated_cost_usd: null,
+    });
 
     const textareaRef = useRef(null);
     const sidebarRef = useRef(null);
@@ -343,6 +363,7 @@ export default function AICopilotSidebar({ context }) {
             const messageId = nextMessageId();
             const patchOps = Array.isArray(data.patch_ops) ? data.patch_ops : [];
             const hunks = buildPatchHunks(messageId, patchOps);
+            const usage = data.usage || null;
             const botMsg = {
                 id: messageId,
                 role: 'assistant',
@@ -354,7 +375,23 @@ export default function AICopilotSidebar({ context }) {
                 needsApproval: hunks.length > 0,
                 applied: false,
                 discarded: false,
+                usage: usage || null,
             };
+
+            if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
+                setSessionUsage((prev) => {
+                    const inSum = prev.input_tokens + (usage.input_tokens || 0);
+                    const outSum = prev.output_tokens + (usage.output_tokens || 0);
+                    const prevCost = prev.estimated_cost_usd != null && !Number.isNaN(prev.estimated_cost_usd) ? prev.estimated_cost_usd : 0;
+                    const addCost = usage.estimated_cost_usd != null && !Number.isNaN(usage.estimated_cost_usd) ? usage.estimated_cost_usd : 0;
+                    return {
+                        input_tokens: inSum,
+                        output_tokens: outSum,
+                        total_tokens: inSum + outSum,
+                        estimated_cost_usd: prevCost + addCost,
+                    };
+                });
+            }
 
             updateMessages((prev) => [...prev, botMsg]);
 
@@ -480,7 +517,19 @@ export default function AICopilotSidebar({ context }) {
                     />
                     <aside className="h-full bg-background text-foreground overflow-auto p-3 flex flex-col">
                         <div className="flex justify-between items-center mb-2">
-                            <div className="font-bold">AI Copilot</div>
+                            <div className="flex flex-col gap-0.5">
+                                <div className="font-bold">AI Copilot</div>
+                                {(sessionUsage.total_tokens > 0) && (
+                                    <div className="text-[11px] flex flex-wrap items-baseline gap-x-1.5">
+                                        <span className="opacity-70">Session:</span>
+                                        <span className="text-cyan-400/90 font-medium">{formatTokens(sessionUsage.total_tokens)}</span>
+                                        <span className="opacity-70">tokens</span>
+                                        {sessionUsage.estimated_cost_usd != null && !Number.isNaN(sessionUsage.estimated_cost_usd) && (
+                                            <span className="text-amber-400/90 font-medium ml-0.5">{formatCost(sessionUsage.estimated_cost_usd)}</span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                             <button
                                 onClick={() => setIsAICopilotSidebarOpened(false)}
                                 className={cx(
@@ -516,6 +565,19 @@ export default function AICopilotSidebar({ context }) {
                                             {msg.patchStats && (
                                                 <div className="mt-2 text-[11px] opacity-70">
                                                     {`${msg.patchStats.operations} edits · +${msg.patchStats.additions} / -${msg.patchStats.deletions}`}
+                                                </div>
+                                            )}
+
+                                            {!isUser && msg.usage && (msg.usage.input_tokens != null || msg.usage.output_tokens != null) && (
+                                                <div className="mt-2 text-[11px] flex flex-wrap items-baseline gap-x-1">
+                                                    <span className="text-cyan-400/90 font-medium">{formatTokens(msg.usage.input_tokens)}</span>
+                                                    <span className="opacity-70">in</span>
+                                                    <span className="opacity-50">/</span>
+                                                    <span className="text-emerald-400/90 font-medium">{formatTokens(msg.usage.output_tokens)}</span>
+                                                    <span className="opacity-70">out</span>
+                                                    {msg.usage.estimated_cost_usd != null && !Number.isNaN(msg.usage.estimated_cost_usd) && (
+                                                        <span className="text-amber-400/90 font-medium ml-1">{formatCost(msg.usage.estimated_cost_usd)}</span>
+                                                    )}
                                                 </div>
                                             )}
 

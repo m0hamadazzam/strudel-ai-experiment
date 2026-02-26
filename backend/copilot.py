@@ -13,7 +13,19 @@ from langchain_core.messages import HumanMessage
 from .database import AIInteraction, Function, get_session
 from .patch_utils import build_patch_operations, summarize_patch_operations
 from .rag_agent import get_rag_graph
-from .schemas import ChatRequest, ChatResponse
+from .schemas import ChatRequest, ChatResponse, TokenUsage
+
+# Optional Langfuse: only import and use when credentials are set
+def _get_langfuse_handler():
+    if not os.getenv("LANGFUSE_SECRET_KEY"):
+        return None
+    try:
+        from langfuse import get_client
+        from langfuse.langchain import CallbackHandler
+        get_client()  # ensure client is initialized from env
+        return CallbackHandler()
+    except Exception:
+        return None
 
 backend_dir = Path(__file__).parent
 load_dotenv(backend_dir / ".env")
@@ -113,6 +125,64 @@ def _validate_generated_code(
     return None
 
 
+# Fallback USD per 1K tokens when Langfuse cost is not available
+_COST_PER_1K = {
+    "gpt-4o-mini": (0.00015, 0.0006),
+    "gpt-5.1-codex-mini": (0.001, 0.003),
+}
+
+
+def _estimate_cost_usd(input_tokens: int, output_tokens: int) -> float | None:
+    """Return approximate USD cost for display. Fallback when Langfuse cost unavailable."""
+    model = os.getenv("OPENAI_MODEL", "gpt-5.1-codex-mini")
+    if model not in _COST_PER_1K:
+        return None
+    in_p, out_p = _COST_PER_1K[model]
+    return (input_tokens / 1000.0) * in_p + (output_tokens / 1000.0) * out_p
+
+
+def _get_langfuse_trace_cost(trace_id: str | None) -> float | None:
+    """Fetch trace from Langfuse and return total_cost (USD). Returns None on any failure."""
+    if not trace_id:
+        return None
+    try:
+        from langfuse import get_client
+        langfuse = get_client()
+        langfuse.flush()
+        trace = langfuse.api.trace.get(trace_id)
+        cost = getattr(trace, "total_cost", None)
+        if cost is not None and not (isinstance(cost, float) and cost < 0):
+            return float(cost)
+    except Exception as e:
+        logger.debug("Could not get Langfuse trace cost: %s", e)
+    return None
+
+
+def _aggregate_usage(final_state: dict, langfuse_cost: float | None = None) -> TokenUsage:
+    """Sum token usage from agent messages and code-gen state. Use langfuse_cost if provided."""
+    input_total = 0
+    output_total = 0
+    for msg in final_state.get("messages") or []:
+        um = getattr(msg, "usage_metadata", None) or {}
+        if isinstance(um, dict):
+            input_total += int(um.get("input_tokens") or 0)
+            output_total += int(um.get("output_tokens") or 0)
+    code_usage = final_state.get("usage") or {}
+    if isinstance(code_usage, dict):
+        input_total += int(code_usage.get("input_tokens") or 0)
+        output_total += int(code_usage.get("output_tokens") or 0)
+    total = input_total + output_total
+    cost = langfuse_cost if langfuse_cost is not None else _estimate_cost_usd(
+        input_total, output_total
+    )
+    return TokenUsage(
+        input_tokens=input_total,
+        output_tokens=output_total,
+        total_tokens=total,
+        estimated_cost_usd=cost,
+    )
+
+
 def _log_interaction(
     user_query: str,
     generated_code: str | None,
@@ -151,7 +221,19 @@ def generate_code(request: ChatRequest) -> ChatResponse:
         initial_state: dict = {
             "messages": [HumanMessage(content=_build_user_content(request))],
         }
-        final_state = graph.invoke(initial_state)
+        langfuse_handler = _get_langfuse_handler()
+        trace_id = None
+        if langfuse_handler:
+            from langfuse import get_client
+            with get_client().start_as_current_observation(
+                as_type="span", name="copilot.generate_code"
+            ):
+                final_state = graph.invoke(
+                    initial_state, config={"callbacks": [langfuse_handler]}
+                )
+                trace_id = get_client().get_current_trace_id()
+        else:
+            final_state = graph.invoke(initial_state)
         parsed = final_state.get("parsed_output")
 
         if parsed is None:
@@ -181,6 +263,8 @@ def generate_code(request: ChatRequest) -> ChatResponse:
 
         patch_ops = build_patch_operations(request.current_code or "", code)
         patch_stats = summarize_patch_operations(patch_ops)
+        langfuse_cost = _get_langfuse_trace_cost(trace_id)
+        usage = _aggregate_usage(final_state, langfuse_cost=langfuse_cost)
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         _log_interaction(user_query, code, elapsed_ms)
@@ -189,6 +273,7 @@ def generate_code(request: ChatRequest) -> ChatResponse:
             explanation=explanation or "Code generated successfully",
             patch_ops=patch_ops,
             patch_stats=patch_stats,
+            usage=usage,
         )
 
     except Exception as e:

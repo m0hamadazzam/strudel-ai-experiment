@@ -12,3 +12,5 @@ FastAPI backend for the Strudel AI Copilot. Exposes the `/api/copilot/chat` endp
 - `GET /` – Health check.
 
 Requires `OPENAI_API_KEY` in `backend/.env`.
+
+**Optional – Langfuse:** Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and optionally `LANGFUSE_BASE_URL` (default `https://cloud.langfuse.com`) to enable tracing for LLM calls. If unset, tracing is skipped.

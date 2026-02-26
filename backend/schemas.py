@@ -39,11 +39,19 @@ class PatchStats(BaseModel):
     operations: int = 0
 
 
+class TokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: Optional[float] = None
+
+
 class ChatResponse(BaseModel):
     code: str
     explanation: str = ""
     patch_ops: list[PatchOperation] = Field(default_factory=list)
     patch_stats: PatchStats = Field(default_factory=PatchStats)
+    usage: Optional[TokenUsage] = None
 
 
 class StrudelCodeOut(BaseModel):
