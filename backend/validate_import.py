@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 """
-Validate the imported functions against the checklist in IMPORT_STRATEGY.md
+Validate the imported functions and presets against the checklist in IMPORT_STRATEGY.md
 """
 
 import json
 from pathlib import Path
 
-from database import Function, get_session
+from database import Function, Preset, Recipe, get_session
+
+from import_data import (
+    BUILTIN_SYNTH_PRESETS,
+    DIRT_SAMPLES_INLINE_PRESETS,
+    PRESET_SOURCES,
+    RECIPE_MDX_DIR,
+    RECIPE_MDX_IMPORT_TAG,
+    RECIPE_SOURCES,
+    _preset_names_from_json,
+    load_recipes_from_file,
+    load_recipes_from_mdx,
+)
 
 
 def validate_import():
@@ -163,6 +175,86 @@ def validate_import():
         print(f"   ✗ FAIL: Missing important functions: {missing}")
     else:
         print("   ✓ PASS: All important functions imported")
+
+    # --- Preset validation ---
+    print("\n10. Preset import validation...")
+    project_root = Path(__file__).parent.parent
+    expected_preset_names = set()
+    for rel_path, category in PRESET_SOURCES:
+        path = project_root / rel_path
+        if path.exists():
+            for name, _cat, _source in _preset_names_from_json(path, category):
+                expected_preset_names.add(name)
+    expected_preset_names.update(BUILTIN_SYNTH_PRESETS)
+    expected_preset_names.update(DIRT_SAMPLES_INLINE_PRESETS)
+
+    db_presets = session.query(Preset).all()
+    db_preset_names = {p.name for p in db_presets}
+
+    print(f"   Expected preset names (from JSONs): {len(expected_preset_names)}")
+    print(f"   Presets in database: {len(db_presets)}")
+
+    missing_presets = expected_preset_names - db_preset_names
+    if missing_presets:
+        print(f"   ✗ FAIL: Missing {len(missing_presets)} presets: {list(missing_presets)[:10]}...")
+    else:
+        print("   ✓ PASS: All expected presets imported")
+
+    preset_names_list = [p.name for p in db_presets]
+    preset_dupes = [n for n in preset_names_list if preset_names_list.count(n) > 1]
+    if preset_dupes:
+        print(f"   ✗ FAIL: Duplicate preset names: {set(preset_dupes)}")
+    else:
+        print("   ✓ PASS: No duplicate preset names")
+
+    preset_categories = {}
+    for p in db_presets:
+        cat = p.category or "none"
+        preset_categories[cat] = preset_categories.get(cat, 0) + 1
+    print("   Preset category distribution:")
+    for cat, count in sorted(preset_categories.items(), key=lambda x: x[1], reverse=True):
+        print(f"     {cat}: {count} presets")
+
+    # Validate preset tags are valid JSON
+    preset_json_errors = []
+    for p in db_presets:
+        if p.tags:
+            try:
+                json.loads(p.tags)
+            except json.JSONDecodeError:
+                preset_json_errors.append(p.name)
+    if preset_json_errors:
+        print(f"   ✗ FAIL: Invalid JSON in tags for presets: {preset_json_errors[:5]}")
+    else:
+        print("   ✓ PASS: All preset tags are valid JSON")
+
+    # --- Recipe validation ---
+    print("\n11. Recipe import validation...")
+    project_root = Path(__file__).parent.parent
+    expected_recipe_count = 0
+    for rel_path, category, import_tag in RECIPE_SOURCES:
+        path = project_root / rel_path
+        if path.exists():
+            recipe_list = load_recipes_from_file(path, category, import_tag)
+            expected_recipe_count += len(recipe_list)
+    mdx_dir = project_root / RECIPE_MDX_DIR
+    if mdx_dir.exists():
+        for mdx_path in sorted(mdx_dir.glob("*.mdx")):
+            expected_recipe_count += len(load_recipes_from_mdx(mdx_path, RECIPE_MDX_IMPORT_TAG))
+    db_recipes = session.query(Recipe).filter(Recipe.tags.like("%import:%")).all()
+    print(f"   Expected recipes (from sources): {expected_recipe_count}")
+    print(f"   Imported recipes in database: {len(db_recipes)}")
+    if len(db_recipes) < expected_recipe_count:
+        print(f"   ✗ FAIL: Missing {expected_recipe_count - len(db_recipes)} recipes")
+    else:
+        print("   ✓ PASS: All expected recipes imported")
+    print("   Recipe category distribution:")
+    recipe_cats = {}
+    for r in db_recipes:
+        c = r.category or "none"
+        recipe_cats[c] = recipe_cats.get(c, 0) + 1
+    for c, n in sorted(recipe_cats.items(), key=lambda x: -x[1]):
+        print(f"     {c}: {n} recipes")
 
     session.close()
     print("\n=== Validation Complete ===")

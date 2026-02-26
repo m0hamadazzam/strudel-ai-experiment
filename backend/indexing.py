@@ -10,7 +10,7 @@ This script:
 
 import json
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 
@@ -84,12 +84,16 @@ def create_function_document(func: Function) -> Document:
     return Document(page_content=content, metadata=metadata)
 
 
-def create_recipe_document(recipe: Recipe) -> Document:
+def create_recipe_document(
+    recipe: Recipe,
+    function_id_to_name: Optional[dict] = None,
+) -> Document:
     """
     Create a Document from a Recipe database record.
 
     Args:
         recipe: Recipe database object
+        function_id_to_name: Optional map of function ID -> name for "Uses:" line
 
     Returns:
         Document with recipe information and metadata
@@ -99,8 +103,19 @@ def create_recipe_document(recipe: Recipe) -> Document:
     if recipe.description:
         content_parts.append(f"Description: {recipe.description}")
 
+    if recipe.difficulty and recipe.difficulty != "unknown":
+        content_parts.append(f"Difficulty: {recipe.difficulty}")
+
+    if recipe.related_functions and function_id_to_name is not None:
+        try:
+            ids = json.loads(recipe.related_functions)
+            if ids:
+                names = [function_id_to_name.get(i, str(i)) for i in ids]
+                content_parts.append("Uses: " + ", ".join(names))
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     if recipe.code:
-        # Include code but truncate if too long
         code_preview = (
             recipe.code[:500] + "..." if len(recipe.code) > 500 else recipe.code
         )
@@ -200,13 +215,14 @@ def index_knowledge_base(force_recreate: bool = False) -> dict:
             documents.append(doc)
             ids.append(f"function:{func.id}")
 
-        # Index recipes
+        # Index recipes (with function ID -> name for "Uses:" in document)
         print("Loading recipes from database...")
         recipes = session.query(Recipe).all()
         print(f"Found {len(recipes)} recipes")
+        function_id_to_name = {f.id: f.name for f in functions}
 
         for recipe in recipes:
-            doc = create_recipe_document(recipe)
+            doc = create_recipe_document(recipe, function_id_to_name)
             documents.append(doc)
             ids.append(f"recipe:{recipe.id}")
 
