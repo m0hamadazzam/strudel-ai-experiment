@@ -90,25 +90,36 @@ def _hydrate_presets(session, ids: Iterable[int]) -> List[Preset]:
 
 
 def _format_function_context(func: Function) -> str:
-    parts: List[str] = [f"Function: {func.name}"]
-
-    if func.description:
-        parts.append(f"Description: {func.description}")
-
+    """Compact function doc: signature-style header + one example."""
+    params_str = ""
     if func.params and func.params not in ("{}", "[]"):
         try:
             params = json.loads(func.params)
-            if params:
-                parts.append(f"Parameters: {params}")
+            if isinstance(params, list) and params:
+                sigs = []
+                for p in params[:4]:
+                    if isinstance(p, dict):
+                        name = p.get("name", "?")
+                        ptype = p.get("type", "")
+                        sigs.append(f"{name}: {ptype}" if ptype else name)
+                    elif isinstance(p, str):
+                        sigs.append(p)
+                params_str = ", ".join(sigs)
         except json.JSONDecodeError:
             pass
+
+    header = f"{func.name}({params_str})"
+    if func.description:
+        header += f" -- {func.description}"
+
+    parts: List[str] = [header]
 
     if func.examples and func.examples != "[]":
         try:
             examples = json.loads(func.examples)
             if examples:
-                # Limit to a couple of examples to avoid bloating the prompt.
-                parts.append(f"Examples: {examples[:2]}")
+                ex = examples[0] if isinstance(examples[0], str) else str(examples[0])
+                parts.append(f"  Ex: {ex[:200]}")
         except json.JSONDecodeError:
             pass
 
@@ -116,7 +127,7 @@ def _format_function_context(func: Function) -> str:
         try:
             synonyms = json.loads(func.synonyms)
             if synonyms:
-                parts.append(f"Also known as: {synonyms}")
+                parts.append(f"  Aliases: {', '.join(str(s) for s in synonyms)}")
         except json.JSONDecodeError:
             pass
 
@@ -128,33 +139,205 @@ MAX_PRESET_CODE_CHARS = 400
 
 
 def _format_recipe_context(recipe: Recipe) -> str:
-    parts: List[str] = [f"Recipe: {recipe.title}"]
-
+    header = f"Recipe: {recipe.title}"
     if recipe.description:
-        parts.append(f"Description: {recipe.description}")
-
+        header += f" -- {recipe.description}"
+    parts: List[str] = [header]
     if recipe.code:
         code = recipe.code
         if len(code) > MAX_RECIPE_CODE_CHARS:
             code = code[:MAX_RECIPE_CODE_CHARS] + "\n..."
-        parts.append("Code:\n" + code)
-
+        parts.append(code)
     return "\n".join(parts)
 
 
 def _format_preset_context(preset: Preset) -> str:
-    parts: List[str] = [f"Preset: {preset.name}"]
-
+    header = f"Preset: {preset.name}"
     if preset.description:
-        parts.append(f"Description: {preset.description}")
-
+        header += f" -- {preset.description}"
+    parts: List[str] = [header]
     if preset.code_example:
         code = preset.code_example
         if len(code) > MAX_PRESET_CODE_CHARS:
             code = code[:MAX_PRESET_CODE_CHARS] + "\n..."
-        parts.append("Example:\n" + code)
-
+        parts.append(code)
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Preset name cache + targeted preset retrieval
+# ---------------------------------------------------------------------------
+
+_ALL_PRESET_NAMES_CACHE: Optional[Set[str]] = None
+
+
+def get_all_preset_names() -> Set[str]:
+    """Return the full set of valid preset names from the DB. Cached."""
+    global _ALL_PRESET_NAMES_CACHE
+    if _ALL_PRESET_NAMES_CACHE is not None:
+        return _ALL_PRESET_NAMES_CACHE
+    session = get_session()
+    try:
+        names: Set[str] = set()
+        for row in session.query(Preset.name).all():
+            if row.name:
+                names.add(row.name)
+        _ALL_PRESET_NAMES_CACHE = names
+        return names
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------------------
+# Function signature cache (for argument-count validation)
+# ---------------------------------------------------------------------------
+
+_FUNCTION_SIGNATURES_CACHE: Optional[Dict[str, Tuple[int, Optional[int], str]]] = None
+
+
+def get_function_signatures() -> Dict[str, Tuple[int, Optional[int], str]]:
+    """Return cached map of function_name -> (min_args, max_args, hint).
+
+    *hint* is a compact string like ``when(binary_pat, func) e.g. .when(…)``
+    that can be embedded in repair error messages.
+
+    min_args heuristic:
+      - Callback-param functions: all params required (the callback is never
+        optional — that's the whole point of the function).
+      - Non-callback functions with 3+ params: allow one optional trailing
+        param (min = n - 1) to avoid false positives on functions like
+        ``echo``, ``euclidRot``, ``adsr`` that may accept fewer args.
+      - Non-callback functions with ≤2 params: all required.
+      - Variadic (``variable: true``): min = 1, max = None.
+    """
+    global _FUNCTION_SIGNATURES_CACHE
+    if _FUNCTION_SIGNATURES_CACHE is not None:
+        return _FUNCTION_SIGNATURES_CACHE
+
+    session = get_session()
+    try:
+        sig_map: Dict[str, Tuple[int, Optional[int], str]] = {}
+        for func in session.query(Function).all():
+            if not func.name or not func.params or func.params in ("[]", "{}", "null", ""):
+                continue
+            try:
+                params = json.loads(func.params)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(params, list) or not params:
+                continue
+
+            n_params = len(params)
+            pnames = [
+                p.get("name", "?") for p in params if isinstance(p, dict)
+            ]
+            variadic = any(
+                isinstance(p, dict) and p.get("variable", False)
+                for p in params
+            )
+            has_callback = any(
+                isinstance(p, dict)
+                and "function" in str(p.get("type", {}).get("names", []))
+                for p in params
+            )
+
+            # Build compact hint: "when(binary_pat, func) e.g. <first line>"
+            sig_part = f"{func.name}({', '.join(pnames)})"
+            example_line = ""
+            if func.examples and func.examples != "[]":
+                try:
+                    exs = json.loads(func.examples)
+                    if exs and isinstance(exs[0], str):
+                        example_line = exs[0].split("\n")[0].strip()[:100]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            hint = f"{sig_part}. Example: {example_line}" if example_line else sig_part
+
+            if variadic:
+                sig_map[func.name] = (1, None, hint)
+            elif has_callback:
+                sig_map[func.name] = (n_params, n_params, hint)
+            elif n_params >= 3:
+                sig_map[func.name] = (n_params - 1, n_params, hint)
+            else:
+                sig_map[func.name] = (n_params, n_params, hint)
+
+        _FUNCTION_SIGNATURES_CACHE = sig_map
+        return sig_map
+    finally:
+        session.close()
+
+
+_SUFFIX_LABELS: Dict[str, str] = {
+    "bd": "Kick/bass drum",
+    "sd": "Snare",
+    "hh": "Hi-hat (closed)",
+    "oh": "Hi-hat (open)",
+    "cp": "Clap",
+    "rim": "Rimshot",
+    "lt": "Low tom",
+    "mt": "Mid tom",
+    "ht": "High tom",
+    "cr": "Crash cymbal",
+    "rd": "Ride cymbal",
+    "cb": "Cowbell",
+    "sh": "Shaker",
+    "tb": "Tambourine",
+}
+
+MAX_BANK_VARIANTS_PER_TYPE = 6
+
+
+def retrieve_preset_context(
+    sound_types: List[str],
+    include_synths: bool = False,
+    max_per_type: int = MAX_BANK_VARIANTS_PER_TYPE,
+) -> str:
+    """Build a compact list of valid preset names for the given sound types.
+
+    For each drum suffix (e.g. "sd") returns the base name plus popular bank
+    variants (e.g. RolandTR808_sd, RolandTR909_sd).  Token-efficient: just
+    names, no full docs.
+    """
+    session = get_session()
+    try:
+        sections: List[str] = []
+
+        for stype in sound_types:
+            label = _SUFFIX_LABELS.get(stype, stype)
+            names: List[str] = [stype]
+
+            bank_presets = (
+                session.query(Preset.name)
+                .filter(Preset.name.like(f"%\\_{stype}", escape="\\"))
+                .order_by(Preset.usage_count.desc())
+                .limit(max_per_type)
+                .all()
+            )
+            names.extend(p.name for p in bank_presets if p.name != stype)
+
+            sections.append(f"{label} ({stype}): {', '.join(names)}")
+
+        if include_synths:
+            synth_presets = (
+                session.query(Preset.name)
+                .filter(Preset.category == "synth")
+                .all()
+            )
+            if synth_presets:
+                synth_names = [p.name for p in synth_presets]
+                sections.append(f"Synths: {', '.join(synth_names)}")
+
+        if not sections:
+            return ""
+
+        header = (
+            "=== Valid Sound Presets ===\n"
+            'Use ONLY these names inside s("...") patterns:'
+        )
+        return header + "\n" + "\n".join(sections)
+    finally:
+        session.close()
 
 
 def retrieve_relevant_context(
@@ -286,6 +469,39 @@ def retrieve_relevant_context(
 
         return "\n\n".join(context_parts) if context_parts else ""
 
+    finally:
+        session.close()
+
+
+def retrieve_context_for_functions(
+    function_names: List[str],
+    k_per_fn: int = 1,
+) -> str:
+    """Retrieve KB docs for specific function names (used in repair flow).
+
+    Does a vector search per name, hydrates from SQLite, and returns
+    compact formatted context for only the requested functions.
+    """
+    MAX_NAMES = 5
+    session = get_session()
+    try:
+        parts: List[str] = []
+        seen_ids: Set[int] = set()
+        for name in function_names[:MAX_NAMES]:
+            func = session.query(Function).filter_by(name=name).first()
+            if func and func.id not in seen_ids:
+                seen_ids.add(func.id)
+                parts.append(_format_function_context(func))
+                continue
+            docs = search_vector_store_with_scores(name, k=k_per_fn, score_threshold=0.5)
+            fids, _, _ = _group_ids_by_type(docs)
+            for fid in fids[:1]:
+                if fid not in seen_ids:
+                    seen_ids.add(fid)
+                    hydrated = _hydrate_functions(session, [fid])
+                    if hydrated:
+                        parts.append(_format_function_context(hydrated[0]))
+        return "\n\n".join(parts)
     finally:
         session.close()
 
