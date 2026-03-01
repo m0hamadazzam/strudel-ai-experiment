@@ -1,11 +1,26 @@
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
+class HistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    code: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     message: str
     current_code: str = ""
+    conversation_history: list[HistoryMessage] = Field(default_factory=list)
+
+
+@dataclass
+class ValidationResult:
+    ok: bool
+    errors: list[str] = field(default_factory=list)
+    invalid_names: list[str] = field(default_factory=list)
 
 
 class PatchOperation(BaseModel):
