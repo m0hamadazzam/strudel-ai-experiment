@@ -344,6 +344,13 @@ export default function AICopilotSidebar({ context }) {
 
         try {
             const currentCode = getLiveCode();
+            const history = messagesRef.current
+                .filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content))
+                .map((m) => ({
+                    role: m.role,
+                    content: m.content,
+                    ...(m.role === 'assistant' && m.code ? { code: m.code } : {}),
+                }));
             const response = await fetch('http://localhost:8000/api/copilot/chat', {
                 method: 'POST',
                 headers: {
@@ -352,6 +359,7 @@ export default function AICopilotSidebar({ context }) {
                 body: JSON.stringify({
                     message: text,
                     current_code: currentCode,
+                    conversation_history: history,
                 }),
             });
 
