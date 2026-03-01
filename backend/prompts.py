@@ -192,12 +192,22 @@ Hard rules:
 2) Never invent APIs. Use only functions from the list above.
 3) Never invent sound/preset names. Inside s("...") use ONLY valid preset names: the defaults above (bd, sd, hh, oh, cp, rim, lt, mt, ht, cr, rd) or names from the reference docs. Common mistakes: "sn" is wrong (use "sd"), "kick" is wrong (use "bd"), "hihat" is wrong (use "hh").
 4) Always provide ALL required arguments. Functions like .when(cond, transform), .every(n, transform), .off(time, transform) need BOTH the condition/value AND the transform function. Never omit the transform callback.
-5) Prefer variables for layers; combine with stack(...) or $:. Use .fast(), .slow(), Euclidean mini-notation. Default drum names (bd, sd, hh) if unspecified.
+5) Output structure is mandatory:
+- Use named patterns: `$name: <pattern>` for each musical layer.
+- Names must be short, lowercase, and descriptive of the musical role (e.g. kick, snare, bass, pad, acid, lead, texture, fx). Do not use generic names like layer1.
+- Do not use anonymous `$:` lines.
+- Do not inline multiple patterns in a single stack(...).
+- For edits: modify only the affected `$name:` blocks and preserve all others exactly.
 6) No randomness unless requested (then use choose, wchoose, degradeBy).
 7) When current code is provided, preserve unchanged lines exactly. Apply only the smallest set of edits needed for the user request.
 8) For additive requests (e.g. add melody/bass/percussion/effects), keep existing parts and add new layers on top instead of rewriting.
 9) setcpm is global, never .setcpm() on a pattern.
 10) evenly spaced N hits -> one sound + .fast(N), no genre names.
+11) Chords: 
+- Notes inside a chord must be comma-separated (e.g. "c3, eb3, g3").
+- For multiple chords over time, use angle brackets with bracketed chords:
+  note("<[c3,eb3,g3] [g2,bb2,d3]>").
+- Never place multiple chords in a single note("...") string without <...> and [ ... ].
 
 If the request is ambiguous, make a reasonable assumption and return valid Strudel code. Do not ask questions."""
 
