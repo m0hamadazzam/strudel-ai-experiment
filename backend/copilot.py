@@ -12,12 +12,19 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import Generator
 
 from dotenv import load_dotenv
 
 from .context_window import window_conversation_history
 from .database import AIInteraction, Function, get_session
-from .generation import generate_with_context, get_model, repair_with_context
+from .generation import (
+    generate_with_context,
+    generate_with_context_stream,
+    get_model,
+    repair_with_context,
+    repair_with_context_stream,
+)
 from .patch_utils import build_patch_operations, summarize_patch_operations
 from .retrieval import (
     extract_function_names_from_query,
@@ -435,6 +442,20 @@ def _build_success_response(
     )
 
 
+def _dump_model(model) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
+def _status_event(message: str, phase: str) -> dict:
+    return {
+        "type": "status",
+        "phase": phase,
+        "message": message,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -623,3 +644,241 @@ def generate_code(request: ChatRequest) -> ChatResponse:
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         _log_interaction(user_query, None, elapsed_ms, path_taken=path_taken)
         return _error_response(request, f"Error generating code: {str(e)}")
+
+
+def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
+    """Streaming variant of generate_code() for live UI updates."""
+    if not os.getenv("OPENAI_API_KEY"):
+        yield {"type": "error", "message": "Error: OPENAI_API_KEY not set in environment"}
+        return
+
+    start = time.perf_counter()
+    user_query = request.message
+    path_taken = "fast"
+
+    try:
+        yield _status_event("Reviewing the current prompt and editor state.", "context")
+
+        history = window_conversation_history(request.conversation_history)
+
+        pre_ctx = ""
+        allowed_names = _get_allowed_function_names()
+        if should_prefetch_kb(request.message, allowed_names):
+            path_taken = "prefetch"
+            yield _status_event("Loading relevant Strudel reference docs.", "context")
+            query = expand_query_with_aliases(request.message)
+            extra = extract_function_names_from_query(query)
+            pre_ctx = retrieve_relevant_context(
+                query, k=3, extra_function_names=extra[:3] if extra else None
+            )
+
+        sound_types, needs_synth = detect_sound_types(request.message)
+        if sound_types or needs_synth:
+            yield _status_event("Checking valid sound presets and synth names.", "context")
+            preset_ctx = retrieve_preset_context(
+                sound_types, include_synths=needs_synth
+            )
+            if preset_ctx:
+                pre_ctx = f"{pre_ctx}\n\n{preset_ctx}" if pre_ctx else preset_ctx
+
+        enable_ws = should_enable_web_search(
+            request.message, pre_ctx if pre_ctx else None
+        )
+        if enable_ws:
+            yield _status_event(
+                "Allowing a limited web lookup if local docs are not enough.",
+                "context",
+            )
+
+        user_content = _build_user_content(request)
+
+        yield _status_event("Generating the first draft.", "generation")
+        draft, usage1 = yield from generate_with_context_stream(
+            user_content=user_content,
+            kb_context=pre_ctx,
+            conversation_history=history,
+            enable_web_search=enable_ws,
+        )
+
+        if draft is None:
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            _log_interaction(user_query, None, elapsed_ms, path_taken=path_taken)
+            yield {
+                "type": "error",
+                "message": (
+                    "The model returned an unexpected response format. "
+                    "Please try again — this is usually a transient issue."
+                ),
+            }
+            return
+
+        yield _status_event(
+            "Validating Strudel functions, sound presets, and argument counts.",
+            "validation",
+        )
+        result = validate_generated_code(draft.code, allowed_names)
+
+        all_presets = get_all_preset_names()
+        user_sounds = (
+            _extract_sound_names_from_code(request.current_code)
+            if request.current_code
+            else set()
+        )
+        sound_errors, invalid_sounds = _validate_sound_names(
+            draft.code, all_presets | user_sounds
+        )
+        if sound_errors:
+            result = ValidationResult(
+                ok=False,
+                errors=result.errors + sound_errors,
+                invalid_names=result.invalid_names + invalid_sounds,
+            )
+
+        sig_map = get_function_signatures()
+        arg_errors, misused_fns = _validate_function_args(draft.code, sig_map)
+        if arg_errors:
+            result = ValidationResult(
+                ok=False,
+                errors=result.errors + arg_errors,
+                invalid_names=result.invalid_names + misused_fns,
+            )
+
+        if result.ok:
+            usage = _sum_usage(usage1)
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            _log_interaction(
+                user_query, draft.code, elapsed_ms,
+                path_taken=path_taken,
+                validation_passed_first=True,
+                prompt_tokens=usage.input_tokens,
+                completion_tokens=usage.output_tokens,
+            )
+            yield _status_event("Building a patch preview for review.", "final")
+            yield {
+                "type": "final",
+                "response": _dump_model(_build_success_response(request, draft, usage)),
+            }
+            return
+
+        path_taken = f"{path_taken}+repair"
+        yield _status_event(
+            "The first draft needs repair against the Strudel reference.",
+            "repair",
+        )
+
+        invalid_fn_only = [
+            n for n in result.invalid_names
+            if n not in set(invalid_sounds) and n not in set(misused_fns)
+        ]
+        repair_ctx_parts: list[str] = []
+        if invalid_fn_only:
+            fn_ctx = retrieve_context_for_functions(invalid_fn_only, k_per_fn=1)
+            if fn_ctx:
+                repair_ctx_parts.append(fn_ctx)
+        if misused_fns:
+            sig_ctx = retrieve_context_for_functions(misused_fns, k_per_fn=1)
+            if sig_ctx:
+                repair_ctx_parts.append(sig_ctx)
+        if invalid_sounds:
+            repair_types = sound_types or ["bd", "sd", "hh", "oh", "cp", "rim"]
+            sound_repair_ctx = retrieve_preset_context(
+                repair_types, include_synths=needs_synth
+            )
+            if sound_repair_ctx:
+                repair_ctx_parts.append(sound_repair_ctx)
+
+        repair_kb_ctx = "\n\n".join(repair_ctx_parts)
+
+        fixed, usage2 = yield from repair_with_context_stream(
+            user_content=user_content,
+            draft_code=draft.code,
+            kb_context=repair_kb_ctx,
+            validation_errors=result.errors,
+            conversation_history=history,
+        )
+
+        total_usage = _sum_usage(usage1, usage2)
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+        if fixed is None:
+            _log_interaction(
+                user_query, draft.code, elapsed_ms,
+                path_taken=path_taken,
+                validation_passed_first=False,
+                repair_attempted=True,
+                prompt_tokens=total_usage.input_tokens,
+                completion_tokens=total_usage.output_tokens,
+            )
+            yield _status_event(
+                "Repair failed, returning the first draft with a warning.",
+                "final",
+            )
+            yield {
+                "type": "final",
+                "response": _dump_model(
+                    _build_success_response(
+                        request,
+                        draft,
+                        total_usage,
+                        warning="Repair call failed; returning first draft.",
+                    )
+                ),
+            }
+            return
+
+        yield _status_event("Re-validating the repaired draft.", "validation")
+        result2 = validate_generated_code(fixed.code, allowed_names)
+        sound_errors2, _ = _validate_sound_names(
+            fixed.code, all_presets | user_sounds
+        )
+        if sound_errors2:
+            result2 = ValidationResult(
+                ok=False,
+                errors=result2.errors + sound_errors2,
+                invalid_names=result2.invalid_names,
+            )
+        arg_errors2, _ = _validate_function_args(fixed.code, sig_map)
+        if arg_errors2:
+            result2 = ValidationResult(
+                ok=False,
+                errors=result2.errors + arg_errors2,
+                invalid_names=result2.invalid_names,
+            )
+
+        _log_interaction(
+            user_query, fixed.code if result2.ok else draft.code, elapsed_ms,
+            path_taken=path_taken,
+            validation_passed_first=False,
+            repair_attempted=True,
+            prompt_tokens=total_usage.input_tokens,
+            completion_tokens=total_usage.output_tokens,
+        )
+
+        if result2.ok:
+            yield _status_event("Repair succeeded. Building a patch preview.", "final")
+            yield {
+                "type": "final",
+                "response": _dump_model(_build_success_response(request, fixed, total_usage)),
+            }
+            return
+
+        yield _status_event(
+            "Repair finished, but some API names still need a manual check.",
+            "final",
+        )
+        yield {
+            "type": "final",
+            "response": _dump_model(
+                _build_success_response(
+                    request,
+                    fixed,
+                    total_usage,
+                    warning="Some functions or sound presets may not be valid Strudel API.",
+                )
+            ),
+        }
+
+    except Exception as e:
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        _log_interaction(user_query, None, elapsed_ms, path_taken=path_taken)
+        yield {"type": "error", "message": f"Error generating code: {str(e)}"}

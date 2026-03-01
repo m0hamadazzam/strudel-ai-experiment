@@ -9,11 +9,12 @@ Two entry points:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import Generator, Optional
 
 from dotenv import load_dotenv
 from openai import NOT_GIVEN, OpenAI
@@ -51,6 +52,12 @@ def _get_openai_client() -> OpenAI:
 
 def get_model() -> str:
     return os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+
+
+def _prompt_cache_key(kind: str) -> str:
+    raw = f"{get_model()}:{kind}:v1"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+    return f"strudel:{digest}"
 
 
 def _extract_usage(resp) -> dict | None:
@@ -177,6 +184,94 @@ def _parse_response(resp, caller: str) -> tuple[StrudelCodeOut | None, dict | No
     return None, usage
 
 
+def _map_stream_event(event) -> dict | None:
+    """Translate SDK stream events into compact UI-friendly payloads."""
+    if event.type == "response.reasoning_summary_text.delta":
+        delta = getattr(event, "delta", None)
+        if delta:
+            return {"type": "reasoning", "delta": delta}
+
+    if event.type == "response.web_search_call.in_progress":
+        return {
+            "type": "status",
+            "phase": "web_search",
+            "message": "Checking online references.",
+        }
+
+    if event.type == "response.web_search_call.searching":
+        return {
+            "type": "status",
+            "phase": "web_search",
+            "message": "Searching Strudel docs and related sources.",
+        }
+
+    if event.type == "response.web_search_call.completed":
+        return {
+            "type": "status",
+            "phase": "web_search",
+            "message": "Online reference check complete.",
+        }
+
+    return None
+
+
+def _stream_with_context(
+    messages: list[dict],
+    *,
+    tools,
+    caller: str,
+) -> Generator[dict, None, tuple[StrudelCodeOut | None, dict | None]]:
+    """Stream reasoning summaries and return the parsed final response."""
+    client = _get_openai_client()
+    model = get_model()
+    prompt_cache_key = _prompt_cache_key(caller)
+    resp = None
+
+    try:
+        with client.responses.stream(
+            model=model,
+            input=messages,
+            text_format=StrudelCodeOut,
+            tools=tools,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            prompt_cache_key=prompt_cache_key,
+            reasoning={"summary": "detailed"},
+        ) as stream:
+            for event in stream:
+                payload = _map_stream_event(event)
+                if payload is not None:
+                    yield payload
+            resp = stream.get_final_response()
+    except Exception as e:
+        logger.warning("%s failed: %s", caller, e)
+    else:
+        parsed, usage = _parse_response(resp, caller)
+        if parsed is not None:
+            return parsed, usage
+        logger.warning("%s: streamed response had no parseable final payload", caller)
+
+    yield {
+        "type": "status",
+        "phase": "recovery",
+        "message": "Recovering final response.",
+    }
+
+    try:
+        resp = client.responses.parse(
+            model=model,
+            input=messages,
+            text_format=StrudelCodeOut,
+            tools=tools,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            prompt_cache_key=prompt_cache_key,
+        )
+    except Exception as e:
+        logger.warning("%s recovery failed: %s", caller, e)
+        return None, None
+
+    return _parse_response(resp, f"{caller}:recovery")
+
+
 # ---------------------------------------------------------------------------
 # Generation entry points
 # ---------------------------------------------------------------------------
@@ -212,6 +307,7 @@ def generate_with_context(
             text_format=StrudelCodeOut,
             tools=tools,
             max_output_tokens=MAX_OUTPUT_TOKENS,
+            prompt_cache_key=_prompt_cache_key("generate"),
         )
 
     try:
@@ -232,6 +328,31 @@ def generate_with_context(
         return None, None
 
     return _parse_response(resp, "generate_with_context")
+
+
+def generate_with_context_stream(
+    user_content: str,
+    kb_context: str,
+    conversation_history: list[dict],
+    enable_web_search: bool,
+) -> Generator[dict, None, tuple[StrudelCodeOut | None, dict | None]]:
+    """Streaming variant of generate_with_context()."""
+    messages = build_prompt_messages(kb_context, conversation_history, user_content)
+
+    tools = NOT_GIVEN
+    if enable_web_search:
+        tools = [
+            {
+                "type": "web_search",
+                "filters": {"allowed_domains": WEB_SEARCH_DOMAINS},
+            }
+        ]
+
+    return (yield from _stream_with_context(
+        messages,
+        tools=tools,
+        caller="generate_with_context_stream",
+    ))
 
 
 def repair_with_context(
@@ -272,6 +393,7 @@ def repair_with_context(
             input=messages,
             text_format=StrudelCodeOut,
             max_output_tokens=MAX_OUTPUT_TOKENS,
+            prompt_cache_key=_prompt_cache_key("repair"),
         )
 
     try:
@@ -292,3 +414,36 @@ def repair_with_context(
         return None, None
 
     return _parse_response(resp, "repair_with_context")
+
+
+def repair_with_context_stream(
+    user_content: str,
+    draft_code: str,
+    kb_context: str,
+    validation_errors: list[str],
+    conversation_history: list[dict],
+) -> Generator[dict, None, tuple[StrudelCodeOut | None, dict | None]]:
+    """Streaming variant of repair_with_context()."""
+    error_summary = "\n".join(f"- {e}" for e in validation_errors)
+    repair_prompt = (
+        f"Your previous code draft had validation errors:\n{error_summary}\n\n"
+        f"Draft code:\n{draft_code}\n\n"
+        f"Fix the code using only the functions and sound presets documented below. "
+        f"Replace any invalid function or sound name with the closest correct "
+        f"alternative from the reference.\n\n"
+        f"Reference docs:\n{kb_context}"
+    )
+
+    messages: list[dict] = [
+        {"role": "developer", "content": get_static_system_prompt()},
+        *conversation_history,
+        {"role": "user", "content": user_content},
+        {"role": "assistant", "content": draft_code},
+        {"role": "user", "content": repair_prompt},
+    ]
+
+    return (yield from _stream_with_context(
+        messages,
+        tools=NOT_GIVEN,
+        caller="repair_with_context_stream",
+    ))

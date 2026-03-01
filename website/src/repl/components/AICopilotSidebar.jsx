@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 
 const MAX_PREVIEW_LINES_PER_HUNK = 40;
 const PATCH_ACTION_EVENT = 'strudel-ai-patch-hunk-action';
+const THINKING_SCAN_ANIMATION = 'strudelThinkingScan 1.25s ease-in-out infinite';
 
 const HUNK_PENDING = 'pending';
 const HUNK_ACCEPTED = 'accepted';
@@ -72,6 +73,47 @@ function formatCost(cost) {
     return '~$0.00';
 }
 
+function sanitizeReasoningText(text) {
+    if (!text) return '';
+    return text.replace(/\*\*/g, '');
+}
+
+async function readNdjsonStream(response, onEvent) {
+    const reader = response.body?.getReader();
+    if (!reader) {
+        throw new Error('Streaming response body is unavailable.');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+        let newlineIndex = buffer.indexOf('\n');
+        while (newlineIndex !== -1) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+
+            if (line) {
+                onEvent(JSON.parse(line));
+            }
+
+            newlineIndex = buffer.indexOf('\n');
+        }
+
+        if (done) {
+            break;
+        }
+    }
+
+    const trailingLine = buffer.trim();
+    if (trailingLine) {
+        onEvent(JSON.parse(trailingLine));
+    }
+}
+
 function findLatestPendingPatchMessage(messages) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
         const message = messages[i];
@@ -119,6 +161,7 @@ export default function AICopilotSidebar({ context }) {
     const [isLoading, setIsLoading] = useState(false);
     const [isResizing, setIsResizing] = useState(false);
     const [activePatchMessageId, setActivePatchMessageId] = useState(null);
+    const [liveAssistant, setLiveAssistant] = useState(null);
     const [sessionUsage, setSessionUsage] = useState({
         input_tokens: 0,
         output_tokens: 0,
@@ -133,6 +176,7 @@ export default function AICopilotSidebar({ context }) {
     const activePatchMessageIdRef = useRef(activePatchMessageId);
     const applyHunkStatusRef = useRef(() => {});
     const appendAssistantNoticeRef = useRef(() => {});
+    const requestAbortRef = useRef(null);
 
     useEffect(() => {
         messagesRef.current = messages;
@@ -166,6 +210,44 @@ export default function AICopilotSidebar({ context }) {
                 content,
             },
         ]);
+    };
+
+    const accumulateSessionUsage = (usage) => {
+        if (!usage || typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') {
+            return;
+        }
+
+        setSessionUsage((prev) => {
+            const inSum = prev.input_tokens + (usage.input_tokens || 0);
+            const outSum = prev.output_tokens + (usage.output_tokens || 0);
+            const prevCost = prev.estimated_cost_usd != null && !Number.isNaN(prev.estimated_cost_usd) ? prev.estimated_cost_usd : 0;
+            const addCost = usage.estimated_cost_usd != null && !Number.isNaN(usage.estimated_cost_usd) ? usage.estimated_cost_usd : 0;
+            return {
+                input_tokens: inSum,
+                output_tokens: outSum,
+                total_tokens: inSum + outSum,
+                estimated_cost_usd: prevCost + addCost,
+            };
+        });
+    };
+
+    const buildAssistantMessage = (data, currentCode) => {
+        const messageId = nextMessageId();
+        const patchOps = Array.isArray(data.patch_ops) ? data.patch_ops : [];
+        const hunks = buildPatchHunks(messageId, patchOps);
+        return {
+            id: messageId,
+            role: 'assistant',
+            content: data.explanation || (hunks.length > 0 ? 'Proposed patch ready for review.' : 'No changes suggested.'),
+            code: data.code || '',
+            patchStats: data.patch_stats || null,
+            baseCode: currentCode,
+            hunks,
+            needsApproval: hunks.length > 0,
+            applied: false,
+            discarded: false,
+            usage: data.usage || null,
+        };
     };
 
     const clearPatchReviewInEditor = () => {
@@ -334,6 +416,11 @@ export default function AICopilotSidebar({ context }) {
         updateMessages((prev) => [...prev, { id: nextMessageId(), role: 'user', content: text }]);
         setInput('');
         setIsLoading(true);
+        setLiveAssistant({
+            phase: 'Preparing request',
+            reasoning: '',
+            isWebSearching: false,
+        });
 
         requestAnimationFrame(() => {
             const el = textareaRef.current;
@@ -351,11 +438,15 @@ export default function AICopilotSidebar({ context }) {
                     content: m.content,
                     ...(m.role === 'assistant' && m.code ? { code: m.code } : {}),
                 }));
-            const response = await fetch('http://localhost:8000/api/copilot/chat', {
+            const abortController = new AbortController();
+            requestAbortRef.current = abortController;
+
+            const response = await fetch('http://localhost:8000/api/copilot/chat/stream', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                signal: abortController.signal,
                 body: JSON.stringify({
                     message: text,
                     current_code: currentCode,
@@ -367,50 +458,67 @@ export default function AICopilotSidebar({ context }) {
                 throw new Error(`API error: ${response.status}`);
             }
 
-            const data = await response.json();
-            const messageId = nextMessageId();
-            const patchOps = Array.isArray(data.patch_ops) ? data.patch_ops : [];
-            const hunks = buildPatchHunks(messageId, patchOps);
-            const usage = data.usage || null;
-            const botMsg = {
-                id: messageId,
-                role: 'assistant',
-                content: data.explanation || (hunks.length > 0 ? 'Proposed patch ready for review.' : 'No changes suggested.'),
-                code: data.code || '',
-                patchStats: data.patch_stats || null,
-                baseCode: currentCode,
-                hunks,
-                needsApproval: hunks.length > 0,
-                applied: false,
-                discarded: false,
-                usage: usage || null,
-            };
+            let finalResponse = null;
+            await readNdjsonStream(response, (event) => {
+                if (!event || typeof event !== 'object') {
+                    return;
+                }
 
-            if (usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number') {
-                setSessionUsage((prev) => {
-                    const inSum = prev.input_tokens + (usage.input_tokens || 0);
-                    const outSum = prev.output_tokens + (usage.output_tokens || 0);
-                    const prevCost = prev.estimated_cost_usd != null && !Number.isNaN(prev.estimated_cost_usd) ? prev.estimated_cost_usd : 0;
-                    const addCost = usage.estimated_cost_usd != null && !Number.isNaN(usage.estimated_cost_usd) ? usage.estimated_cost_usd : 0;
-                    return {
-                        input_tokens: inSum,
-                        output_tokens: outSum,
-                        total_tokens: inSum + outSum,
-                        estimated_cost_usd: prevCost + addCost,
-                    };
-                });
+                if (event.type === 'status') {
+                    setLiveAssistant((prev) => {
+                        if (!prev) return prev;
+                        const message = event.message || prev.phase;
+                        return {
+                            ...prev,
+                            phase: message,
+                            isWebSearching: event.phase === 'web_search',
+                        };
+                    });
+                    return;
+                }
+
+                if (event.type === 'reasoning') {
+                    setLiveAssistant((prev) => {
+                        if (!prev) return prev;
+                        return {
+                            ...prev,
+                            reasoning: `${prev.reasoning || ''}${event.delta || ''}`,
+                        };
+                    });
+                    return;
+                }
+
+                if (event.type === 'final') {
+                    finalResponse = event.response || null;
+                    return;
+                }
+
+                if (event.type === 'error') {
+                    throw new Error(event.message || 'The copilot stream failed.');
+                }
+            });
+
+            if (!finalResponse) {
+                throw new Error('Copilot stream ended without a final response.');
             }
+
+            const botMsg = buildAssistantMessage(finalResponse, currentCode);
+            accumulateSessionUsage(botMsg.usage);
 
             updateMessages((prev) => [...prev, botMsg]);
 
-            if (hunks.length > 0) {
+            if (botMsg.hunks.length > 0) {
                 requestAnimationFrame(() => {
                     activatePatchMessage(botMsg.id, messagesRef.current, true);
                 });
             }
         } catch (error) {
-            appendAssistantNotice(`Error: ${error.message}`);
+            if (error.name !== 'AbortError') {
+                appendAssistantNotice(`Error: ${error.message}`);
+            }
         } finally {
+            requestAbortRef.current = null;
+            setLiveAssistant(null);
             setIsLoading(false);
         }
     };
@@ -469,6 +577,7 @@ export default function AICopilotSidebar({ context }) {
     contextRef.current = context;
     useEffect(() => {
         return () => {
+            requestAbortRef.current?.abort();
             const editorInstance = contextRef.current?.editorRef?.current;
             if (editorInstance?.clearPatchReview) {
                 editorInstance.clearPatchReview();
@@ -517,6 +626,15 @@ export default function AICopilotSidebar({ context }) {
             )}
             style={isAICopilotSidebarOpen ? { width: `${aiCopilotSidebarWidth}px` } : {}}
         >
+            <style>{`
+                @keyframes strudelThinkingScan {
+                    0% { transform: translateX(-140%); opacity: 0; }
+                    15% { opacity: 1; }
+                    50% { transform: translateX(0%); opacity: 1; }
+                    85% { opacity: 1; }
+                    100% { transform: translateX(140%); opacity: 0; }
+                }
+            `}</style>
             {isAICopilotSidebarOpen ? (
                 <>
                     <div
@@ -700,8 +818,31 @@ export default function AICopilotSidebar({ context }) {
 
                             {isLoading && (
                                 <div className="flex justify-start">
-                                    <div className="max-w-[85%] rounded px-2 py-1 text-sm bg-background">
-                                        <span className="opacity-50">Generating code...</span>
+                                    <div className="max-w-[85%] rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm space-y-3">
+                                        <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.16em] text-cyan-300/80">
+                                            <div className="flex items-center gap-2">
+                                                <span className="h-2 w-2 rounded-full bg-cyan-300 animate-pulse" />
+                                                <span>Thinking</span>
+                                            </div>
+                                            {liveAssistant?.isWebSearching && (
+                                                <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-1 text-[10px] tracking-[0.12em] text-cyan-200/90">
+                                                    Web
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        <div className="relative h-1 overflow-hidden rounded-full bg-white/10">
+                                            <div
+                                                className="absolute inset-y-0 left-0 w-1/3 rounded-full bg-gradient-to-r from-transparent via-cyan-300/90 to-transparent"
+                                                style={{ animation: THINKING_SCAN_ANIMATION }}
+                                            />
+                                        </div>
+
+                                        <div className="whitespace-pre-wrap text-sm text-foreground/90">
+                                            {sanitizeReasoningText(liveAssistant?.reasoning)?.trim()
+                                                ? sanitizeReasoningText(liveAssistant?.reasoning)
+                                                : (liveAssistant?.phase || 'Thinking through the request.')}
+                                        </div>
                                     </div>
                                 </div>
                             )}
