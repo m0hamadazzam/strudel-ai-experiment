@@ -12,7 +12,7 @@ It exists solely for **learning, experimentation, and research purposes**.
 # Strudel AI Experiment
 > A personal learning project exploring AI-assisted live coding — not an official Strudel extension.
 
-**Quick start:** Run the app with `./start.sh` (backend + frontend). Full setup: **[GETTING_STARTED.md](GETTING_STARTED.md)**.
+**Quick start:** Run the app with `./start.sh` (backend + frontend). Full setup is in [Getting started](#getting-started) below.
 
 An **experimental AI copilot sidebar** for browser-based live coding, exploring how Large Language Models (LLMs) can assist creative coding workflows.
 
@@ -100,8 +100,90 @@ All modifications and experiments remain open-source under the same license.
 
 ---
 
-## Running This Project Locally
+## Getting started
 
-> ⚠️ This setup is intended for **development and learning only**.
+> ⚠️ This setup is for **development and learning only**.
 
-See **[GETTING_STARTED.md](GETTING_STARTED.md)** for prerequisites, one-time setup, and **`./start.sh`** to start backend and frontend with one command.
+### Prerequisites
+
+- **Node.js** 18+
+- **pnpm** (or npm)
+- **Python** 3.9+
+- **OpenAI API key** (for the copilot)
+
+### One-time setup
+
+From the **project root**:
+
+**1. Backend (Python)**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r backend/requirements.txt
+```
+
+Create `backend/.env` with your API key:
+
+```
+OPENAI_API_KEY=sk-...
+```
+
+**2. Frontend (Node)**
+
+```bash
+pnpm install
+```
+
+**3. Optional – RAG and knowledge base (recommended)**
+
+So the copilot can use the Strudel function reference and validation:
+
+```bash
+# With .venv activated, from project root
+python -m backend.db.init_db
+python -m backend.scripts.import_data
+python -m backend.scripts.indexing
+```
+
+- `backend.db.init_db` creates the SQLite DB and tables.
+- `backend.scripts.import_data` imports functions from `doc.json` (must exist at project root; generate with `pnpm run jsdoc-json`).
+- `backend.scripts.indexing` builds the vector store for RAG (requires `OPENAI_API_KEY`).
+
+Details and troubleshooting: [backend/README.md](backend/README.md).
+
+### Run the app
+
+From the project root (macOS/Linux):
+
+```bash
+./start.sh
+```
+
+- Backend: http://localhost:8000  
+- Frontend: http://localhost:4321  
+- Press **Ctrl+C** to stop both.
+
+Open **http://localhost:4321** and use the copilot sidebar.
+
+**Without the script (e.g. Windows):**
+
+- **Terminal 1 – backend:** `source .venv/bin/activate` then `python -m uvicorn backend.main:app --reload --port 8000`
+- **Terminal 2 – frontend:** `pnpm run start`
+
+### Testing
+
+Backend tests (venv activated, from project root):
+
+```bash
+python -m pytest backend/tests -v
+```
+
+### Troubleshooting
+
+- **Backend / copilot does nothing** – Backend may have failed (e.g. missing `OPENAI_API_KEY`). Run it in a separate terminal: `source .venv/bin/activate && python -m uvicorn backend.main:app --reload --port 8000`. In the browser, DevTools (F12) → Network: check for failed requests to `http://localhost:8000/api/copilot/chat`.
+- **"OPENAI_API_KEY not set"** – Add it to `backend/.env`.
+- **Port 8000 or 4321 in use** – Stop the other process or change the port in `start.sh` / uvicorn / Astro.
+- **Copilot returns errors** – Ensure the backend is running and the frontend uses `http://localhost:8000`.
+- **RAG / "not in the knowledge base"** – Run the optional RAG setup (init_db, import_data, indexing). See [backend/README.md](backend/README.md).
+- **Import or indexing fails** – Ensure `doc.json` exists at project root (`pnpm run jsdoc-json`).
