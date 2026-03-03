@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 
-from .schemas import PatchOperation, PatchStats
+from backend.core.schemas import PatchOperation, PatchStats
 
 
 def _line_count(text: str) -> int:

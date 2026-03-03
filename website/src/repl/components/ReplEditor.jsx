@@ -4,7 +4,7 @@ import { Code } from '@src/repl/components/Code';
 import UserFacingErrorMessage from '@src/repl/components/UserFacingErrorMessage';
 import { Header } from './Header';
 import { useSettings } from '@src/settings.mjs';
-import AICopilotSidebar from './AICopilotSidebar';
+import AICopilotSidebar from './copilot/AICopilotSidebar';
 
 export default function ReplEditor(Props) {
   const { context, ...editorProps } = Props;

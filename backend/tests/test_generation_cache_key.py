@@ -1,4 +1,4 @@
-from backend.generation import _prompt_cache_key
+from backend.core.generation import _prompt_cache_key
 
 
 def test_prompt_cache_key_is_within_api_limit():

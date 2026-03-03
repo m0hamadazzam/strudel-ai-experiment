@@ -13,7 +13,9 @@ import re
 from html import unescape
 from pathlib import Path
 
-from database import Function, Preset, Recipe, get_session
+from backend.db.models import Function, Preset, Recipe
+from backend.db.session import get_session
+from backend.rag.relationship_utils import rebuild_function_relationships
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +706,7 @@ def import_functions(doc_json_path, db_session):
 def main():
     """Main import function."""
     # Find doc.json (should be in project root)
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     doc_json_path = project_root / "doc.json"
 
     if not doc_json_path.exists():
@@ -719,6 +721,7 @@ def main():
         result_f = import_functions(doc_json_path, session)
         result_p = import_presets(project_root, session)
         result_r = import_recipes(project_root, session)
+        result_rel = rebuild_function_relationships(session)
 
         print("\n=== Import Summary ===")
         print("Functions:")
@@ -736,6 +739,9 @@ def main():
         print(f"  Skipped: {result_r['skipped']}")
         if result_r["errors"]:
             print(f"  Errors: {len(result_r['errors'])}")
+        print("Function relationships:")
+        print(f"  Built: {result_rel['relationships']}")
+        print(f"  Source functions: {result_rel['sources']}")
 
         if result_f["errors"]:
             print("\nFunction errors:")

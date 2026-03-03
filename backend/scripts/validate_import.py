@@ -6,9 +6,10 @@ Validate the imported functions and presets against the checklist in IMPORT_STRA
 import json
 from pathlib import Path
 
-from database import Function, Preset, Recipe, get_session
+from backend.db.models import Function, Preset, Recipe
+from backend.db.session import get_session
 
-from import_data import (
+from backend.scripts.import_data import (
     BUILTIN_SYNTH_PRESETS,
     DIRT_SAMPLES_INLINE_PRESETS,
     PRESET_SOURCES,
@@ -24,11 +25,11 @@ from import_data import (
 def validate_import():
     """Run validation checks on imported data."""
     session = get_session()
+    project_root = Path(__file__).resolve().parent.parent.parent
 
     print("=== Validation Checklist ===\n")
 
     # Load doc.json to compare
-    project_root = Path(__file__).parent.parent
     doc_json_path = project_root / "doc.json"
 
     with open(doc_json_path, "r") as f:
@@ -178,7 +179,6 @@ def validate_import():
 
     # --- Preset validation ---
     print("\n10. Preset import validation...")
-    project_root = Path(__file__).parent.parent
     expected_preset_names = set()
     for rel_path, category in PRESET_SOURCES:
         path = project_root / rel_path
@@ -230,7 +230,6 @@ def validate_import():
 
     # --- Recipe validation ---
     print("\n11. Recipe import validation...")
-    project_root = Path(__file__).parent.parent
     expected_recipe_count = 0
     for rel_path, category, import_tag in RECIPE_SOURCES:
         path = project_root / rel_path

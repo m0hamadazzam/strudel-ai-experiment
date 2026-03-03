@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend.generation import generate_with_context_stream
+from backend.core.generation import generate_with_context_stream
 
 
 class _FailingStream:
@@ -52,8 +52,8 @@ def test_generate_with_context_stream_recovers_with_non_stream_parse():
         status="completed",
     )
 
-    with patch("backend.generation.build_prompt_messages", return_value=[]):
-        with patch("backend.generation._get_openai_client", return_value=_FakeClient(parsed_response)):
+    with patch("backend.core.generation.build_prompt_messages", return_value=[]):
+        with patch("backend.core.generation._get_openai_client", return_value=_FakeClient(parsed_response)):
             gen = generate_with_context_stream(
                 user_content="make a beat",
                 kb_context="",

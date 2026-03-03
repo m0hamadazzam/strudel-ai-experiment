@@ -42,14 +42,14 @@ So the copilot can use the Strudel function reference and validation:
 
 ```bash
 # With .venv activated, from project root
-cd backend && python init_db.py && cd ..
-cd backend && python import_data.py && cd ..
-python -m backend.indexing
+python -m backend.db.init_db
+python -m backend.scripts.import_data
+python -m backend.scripts.indexing
 ```
 
-- `init_db.py` creates the SQLite DB and tables.
-- `import_data.py` imports functions from `doc.json` (must exist at project root).
-- `indexing` builds the vector store for the RAG agent (requires `OPENAI_API_KEY`).
+- `backend.db.init_db` creates the SQLite DB and tables.
+- `backend.scripts.import_data` imports functions from `doc.json` (must exist at project root).
+- `backend.scripts.indexing` builds the vector store for the RAG agent (requires `OPENAI_API_KEY`).
 
 For RAG architecture and troubleshooting, see [backend/RAG_SETUP.md](backend/RAG_SETUP.md).
 

@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import MagicMock
 
-from backend.retrieval import _group_ids_by_type
+from backend.rag.retrieval import _group_ids_by_type
 
 
 class TestGroupIdsByType(unittest.TestCase):
