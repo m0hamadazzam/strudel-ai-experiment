@@ -114,36 +114,6 @@ def add_documents_to_vector_store(
     return document_ids
 
 
-def search_vector_store(
-    query: str,
-    k: int = 5,
-    filter_dict: Optional[dict] = None,
-    vector_store: Optional[Chroma] = None,
-) -> List[Document]:
-    """
-    Search the vector store for similar documents.
-
-    Args:
-        query: Search query string.
-        k: Number of results to return (default: 5).
-        filter_dict: Optional metadata filters.
-        vector_store: Optional vector store instance. If None, will create one.
-
-    Returns:
-        List of Document objects sorted by relevance.
-    """
-    if vector_store is None:
-        vector_store = get_vector_store()
-
-    results = vector_store.similarity_search(
-        query,
-        k=k,
-        filter=filter_dict,
-    )
-
-    return results
-
-
 def search_vector_store_with_scores(
     query: str,
     k: int = 5,

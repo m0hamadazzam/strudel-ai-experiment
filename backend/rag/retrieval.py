@@ -712,22 +712,6 @@ def retrieve_relevant_context_bundle(
         session.close()
 
 
-def retrieve_relevant_context(
-    query: str,
-    k: int = 4,
-    category_filter: Optional[str] = None,
-    extra_function_names: Optional[List[str]] = None,
-    sound_types: Optional[List[str]] = None,
-) -> str:
-    return retrieve_relevant_context_bundle(
-        query,
-        k=k,
-        category_filter=category_filter,
-        extra_function_names=extra_function_names,
-        sound_types=sound_types,
-    ).text
-
-
 def retrieve_context_for_functions(
     function_names: List[str],
     k_per_fn: int = 1,

@@ -8,13 +8,11 @@ from .retrieval import (
     retrieve_context_for_functions,
     retrieve_preset_context,
     retrieve_preset_context_bundle,
-    retrieve_relevant_context,
     retrieve_relevant_context_bundle,
 )
 from .vector_store import (
     add_documents_to_vector_store,
     get_vector_store,
-    search_vector_store,
     search_vector_store_with_scores,
 )
 
@@ -29,10 +27,8 @@ __all__ = [
     "retrieve_context_for_functions",
     "retrieve_preset_context",
     "retrieve_preset_context_bundle",
-    "retrieve_relevant_context",
     "retrieve_relevant_context_bundle",
     "add_documents_to_vector_store",
     "get_vector_store",
-    "search_vector_store",
     "search_vector_store_with_scores",
 ]
