@@ -27,7 +27,7 @@ def main():
     init_database()
     print("Database initialized successfully!")
     print(
-        "Tables created: functions, function_relationships, presets, recipes, ai_context_cache, ai_interactions"
+        "Tables created: functions, function_relationships, presets, recipes, ai_interactions"
     )
 
 

@@ -94,20 +94,6 @@ class Recipe(Base):
     __table_args__ = (Index("idx_recipes_category", "category"),)
 
 
-class AIContextCache(Base):
-    __tablename__ = "ai_context_cache"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    query_hash = Column(String(64), unique=True, nullable=False)
-    relevant_functions = Column(Text)  # JSON array
-    relevant_recipes = Column(Text)  # JSON array
-    context_text = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime)
-
-    __table_args__ = (Index("idx_ai_cache_hash", "query_hash"),)
-
-
 class AIInteraction(Base):
     __tablename__ = "ai_interactions"
 

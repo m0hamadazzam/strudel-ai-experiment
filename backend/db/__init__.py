@@ -1,5 +1,4 @@
 from .models import (
-    AIContextCache,
     AIInteraction,
     Base,
     Function,
@@ -10,7 +9,6 @@ from .models import (
 from .session import get_database_path, get_engine, get_session, init_database
 
 __all__ = [
-    "AIContextCache",
     "AIInteraction",
     "Base",
     "Function",
