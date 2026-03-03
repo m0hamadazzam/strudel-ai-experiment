@@ -246,7 +246,7 @@ def build_prompt_messages(
 
 
 def build_system_prompt(kb_context: str = "") -> str:
-    """Base system prompt; optionally append KB reference docs for rag_agent."""
+    """Base system prompt; optionally append KB reference docs for copilot."""
     out = get_static_system_prompt()
     if kb_context and kb_context.strip():
         out = out + "\n\nReference docs:\n" + kb_context.strip()
