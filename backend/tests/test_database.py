@@ -2,7 +2,7 @@
 
 import unittest
 
-from backend.database import get_engine, get_session
+from backend.db.session import get_engine, get_session
 
 
 class TestDatabaseSessionFactory(unittest.TestCase):

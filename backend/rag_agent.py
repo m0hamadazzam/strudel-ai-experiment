@@ -18,9 +18,12 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from openai import OpenAI
 
-from .prompts import build_system_prompt
-from .retrieval import extract_function_names_from_query, retrieve_relevant_context
-from .schemas import StrudelCodeOut
+from backend.core.prompts import build_system_prompt
+from backend.core.schemas import StrudelCodeOut
+from backend.rag.retrieval import (
+    extract_function_names_from_query,
+    retrieve_relevant_context,
+)
 
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(backend_dir, ".env"))

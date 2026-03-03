@@ -14,8 +14,9 @@ from typing import List, Optional
 
 from langchain_core.documents import Document
 
-from .database import Function, Preset, Recipe, get_session
-from .vector_store import add_documents_to_vector_store, get_vector_store
+from backend.db.models import Function, Preset, Recipe
+from backend.db.session import get_session
+from backend.rag.vector_store import add_documents_to_vector_store, get_vector_store
 
 
 def create_function_document(func: Function) -> Document:
@@ -181,6 +182,7 @@ def index_knowledge_base(force_recreate: bool = False) -> dict:
         Dictionary with indexing statistics
     """
     session = get_session()
+    backend_dir = Path(__file__).resolve().parent.parent
 
     try:
         # Get vector store
@@ -190,7 +192,6 @@ def index_knowledge_base(force_recreate: bool = False) -> dict:
         # so that a clean index can be built from the SQLite source of truth.
         if force_recreate:
             try:
-                backend_dir = Path(__file__).parent
                 persist_dir = backend_dir / "chroma_db"
                 if persist_dir.exists():
                     import shutil

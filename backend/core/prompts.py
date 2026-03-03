@@ -12,7 +12,8 @@ import json
 import logging
 from collections import defaultdict
 
-from .database import Function, get_session
+from backend.db.models import Function
+from backend.db.session import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -242,3 +243,11 @@ def build_prompt_messages(
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": user_content})
     return messages
+
+
+def build_system_prompt(kb_context: str = "") -> str:
+    """Base system prompt; optionally append KB reference docs for rag_agent."""
+    out = get_static_system_prompt()
+    if kb_context and kb_context.strip():
+        out = out + "\n\nReference docs:\n" + kb_context.strip()
+    return out

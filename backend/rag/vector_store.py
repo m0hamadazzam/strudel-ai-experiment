@@ -16,7 +16,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 
-backend_dir = Path(__file__).parent
+backend_dir = Path(__file__).resolve().parent.parent
 load_dotenv(backend_dir / ".env")
 
 # Embedding model configuration

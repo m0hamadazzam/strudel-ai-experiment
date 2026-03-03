@@ -1,6 +1,6 @@
 import unittest
 
-from backend.patch_utils import (
+from backend.patching import (
     apply_patch_operations,
     build_patch_operations,
     summarize_patch_operations,

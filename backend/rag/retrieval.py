@@ -10,13 +10,28 @@ Key design:
 - Retrieved IDs are hydrated back into full canonical records from SQLite.
 """
 
+from __future__ import annotations
+
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from langchain_core.documents import Document
-from .database import Function, Preset, Recipe, get_session
+
+from backend.db.models import Function, Preset, Recipe
+from backend.db.session import get_session
+
+from .relationship_utils import get_related_function_ids
 from .vector_store import search_vector_store_with_scores
+
+
+@dataclass
+class RetrievedContext:
+    text: str = ""
+    function_ids: list[int] = field(default_factory=list)
+    recipe_ids: list[int] = field(default_factory=list)
+    preset_ids: list[int] = field(default_factory=list)
 
 
 
@@ -136,13 +151,175 @@ def _format_function_context(func: Function) -> str:
 
 MAX_RECIPE_CODE_CHARS = 600
 MAX_PRESET_CODE_CHARS = 400
+_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "like",
+    "make",
+    "me",
+    "my",
+    "of",
+    "on",
+    "please",
+    "some",
+    "that",
+    "the",
+    "this",
+    "to",
+    "with",
+}
+_BEGINNER_HINTS = {"beginner", "easy", "simple", "basic"}
+_ADVANCED_HINTS = {"advanced", "complex", "expert"}
+_INTERMEDIATE_HINTS = {"intermediate"}
 
 
-def _format_recipe_context(recipe: Recipe) -> str:
+def _parse_json_list(raw: str | None) -> list:
+    if not raw or raw in ("[]", "{}", "null"):
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _recipe_function_ids(recipe: Recipe) -> set[int]:
+    ids: set[int] = set()
+    for value in _parse_json_list(recipe.related_functions):
+        try:
+            ids.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _query_tokens(text: str) -> set[str]:
+    tokens = {
+        token
+        for token in re.findall(r"\b[a-z][a-z0-9_+-]{2,}\b", text.lower())
+        if token not in _QUERY_STOPWORDS
+    }
+    return tokens
+
+
+def _query_difficulty(text: str) -> str | None:
+    tokens = _query_tokens(text)
+    if tokens & _BEGINNER_HINTS:
+        return "beginner"
+    if tokens & _ADVANCED_HINTS:
+        return "advanced"
+    if tokens & _INTERMEDIATE_HINTS:
+        return "intermediate"
+    return None
+
+
+def _score_recipe(
+    recipe: Recipe,
+    *,
+    vector_rank: dict[int, int],
+    preferred_function_ids: set[int],
+    query_tokens: set[str],
+    difficulty_hint: str | None,
+    sound_types: list[str] | None,
+) -> float:
+    score = 0.0
+
+    if recipe.id in vector_rank:
+        score += max(0.5, 3.0 - (0.35 * vector_rank[recipe.id]))
+
+    related_function_overlap = len(_recipe_function_ids(recipe) & preferred_function_ids)
+    if related_function_overlap:
+        score += related_function_overlap * 2.5
+
+    if difficulty_hint and recipe.difficulty == difficulty_hint:
+        score += 1.0
+
+    haystack = " ".join(
+        filter(
+            None,
+            [
+                recipe.title,
+                recipe.description,
+                recipe.category,
+                recipe.tags,
+            ],
+        )
+    ).lower()
+    code_lower = (recipe.code or "").lower()
+    for token in query_tokens:
+        if token in haystack:
+            score += 0.6
+        elif token in code_lower:
+            score += 0.25
+
+    if sound_types:
+        for sound_type in sound_types:
+            if re.search(rf"(?<![a-z0-9_]){re.escape(sound_type)}(?![a-z0-9_])", code_lower):
+                score += 0.9
+
+    return score
+
+
+def _rank_recipe_ids(
+    session,
+    *,
+    ordered_vector_recipe_ids: list[int],
+    preferred_function_ids: list[int],
+    query: str,
+    sound_types: list[str] | None,
+    max_recipes: int,
+) -> list[int]:
+    vector_rank = {
+        recipe_id: rank for rank, recipe_id in enumerate(ordered_vector_recipe_ids)
+    }
+    query_tokens = _query_tokens(query)
+    difficulty_hint = _query_difficulty(query)
+    preferred_set = set(preferred_function_ids)
+
+    scored: list[tuple[float, int]] = []
+    for recipe in session.query(Recipe).all():
+        score = _score_recipe(
+            recipe,
+            vector_rank=vector_rank,
+            preferred_function_ids=preferred_set,
+            query_tokens=query_tokens,
+            difficulty_hint=difficulty_hint,
+            sound_types=sound_types,
+        )
+        if score <= 0:
+            continue
+        scored.append((score, recipe.id))
+
+    scored.sort(key=lambda item: (-item[0], vector_rank.get(item[1], 9999), item[1]))
+    return [recipe_id for _, recipe_id in scored[:max_recipes]]
+
+
+def _format_recipe_context(
+    recipe: Recipe,
+    *,
+    function_id_to_name: dict[int, str] | None = None,
+) -> str:
     header = f"Recipe: {recipe.title}"
+    if recipe.difficulty:
+        header += f" [{recipe.difficulty}]"
     if recipe.description:
         header += f" -- {recipe.description}"
     parts: List[str] = [header]
+    if function_id_to_name:
+        related_names = [
+            function_id_to_name[func_id]
+            for func_id in _recipe_function_ids(recipe)
+            if func_id in function_id_to_name
+        ]
+        if related_names:
+            parts.append(f"  Uses: {', '.join(related_names[:8])}")
     if recipe.code:
         code = recipe.code
         if len(code) > MAX_RECIPE_CODE_CHARS:
@@ -288,11 +465,11 @@ _SUFFIX_LABELS: Dict[str, str] = {
 MAX_BANK_VARIANTS_PER_TYPE = 6
 
 
-def retrieve_preset_context(
+def retrieve_preset_context_bundle(
     sound_types: List[str],
     include_synths: bool = False,
     max_per_type: int = MAX_BANK_VARIANTS_PER_TYPE,
-) -> str:
+) -> RetrievedContext:
     """Build a compact list of valid preset names for the given sound types.
 
     For each drum suffix (e.g. "sd") returns the base name plus popular bank
@@ -302,50 +479,78 @@ def retrieve_preset_context(
     session = get_session()
     try:
         sections: List[str] = []
+        preset_ids: list[int] = []
+        seen_preset_ids: set[int] = set()
 
         for stype in sound_types:
             label = _SUFFIX_LABELS.get(stype, stype)
             names: List[str] = [stype]
 
             bank_presets = (
-                session.query(Preset.name)
+                session.query(Preset)
                 .filter(Preset.name.like(f"%\\_{stype}", escape="\\"))
                 .order_by(Preset.usage_count.desc())
                 .limit(max_per_type)
                 .all()
             )
-            names.extend(p.name for p in bank_presets if p.name != stype)
+            for preset in bank_presets:
+                if preset.name != stype:
+                    names.append(preset.name)
+                if preset.id not in seen_preset_ids:
+                    seen_preset_ids.add(preset.id)
+                    preset_ids.append(preset.id)
 
             sections.append(f"{label} ({stype}): {', '.join(names)}")
 
         if include_synths:
             synth_presets = (
-                session.query(Preset.name)
+                session.query(Preset)
                 .filter(Preset.category == "synth")
+                .order_by(Preset.usage_count.desc(), Preset.name.asc())
                 .all()
             )
             if synth_presets:
-                synth_names = [p.name for p in synth_presets]
+                synth_names = [preset.name for preset in synth_presets]
+                for preset in synth_presets:
+                    if preset.id not in seen_preset_ids:
+                        seen_preset_ids.add(preset.id)
+                        preset_ids.append(preset.id)
                 sections.append(f"Synths: {', '.join(synth_names)}")
 
         if not sections:
-            return ""
+            return RetrievedContext()
 
         header = (
             "=== Valid Sound Presets ===\n"
             'Use ONLY these names inside s("...") patterns:'
         )
-        return header + "\n" + "\n".join(sections)
+        return RetrievedContext(
+            text=header + "\n" + "\n".join(sections),
+            preset_ids=preset_ids,
+        )
     finally:
         session.close()
 
 
-def retrieve_relevant_context(
+def retrieve_preset_context(
+    sound_types: List[str],
+    include_synths: bool = False,
+    max_per_type: int = MAX_BANK_VARIANTS_PER_TYPE,
+) -> str:
+    return retrieve_preset_context_bundle(
+        sound_types,
+        include_synths=include_synths,
+        max_per_type=max_per_type,
+    ).text
+
+
+def retrieve_relevant_context_bundle(
     query: str,
     k: int = 4,
     category_filter: Optional[str] = None,
     extra_function_names: Optional[List[str]] = None,
-) -> str:
+    sound_types: Optional[List[str]] = None,
+) -> RetrievedContext:
     """
     Retrieve relevant context from the knowledge base for a given query.
 
@@ -364,10 +569,11 @@ def retrieve_relevant_context(
         extra_function_names: Optional list of function names to include (e.g. from query).
 
     Returns:
-        Formatted context string ready for prompt injection.
+        A RetrievedContext containing the formatted context string and the IDs
+        that backed it.
     """
     MAX_FUNCTIONS = 3
-    MAX_RECIPES = 2
+    MAX_RECIPES = 3
     MAX_PRESETS = 2
     MAX_CONTEXT_CHARS = 8000
     SCORE_THRESHOLD = 0.7
@@ -385,27 +591,44 @@ def retrieve_relevant_context(
         docs_with_scores
     )
 
-    if extra_function_names:
-        session = get_session()
-        try:
-            extra_ids: List[int] = []
+    session = get_session()
+    try:
+        extra_ids: List[int] = []
+        if extra_function_names:
             seen = set(function_ids_ordered)
             for name in extra_function_names[:MAX_FUNCTIONS]:
                 func = session.query(Function).filter_by(name=name).first()
                 if func and func.id not in seen:
                     extra_ids.append(func.id)
                     seen.add(func.id)
-            function_ids_ordered = extra_ids + [
-                fid for fid in function_ids_ordered if fid not in set(extra_ids)
-            ]
-        finally:
-            session.close()
 
-    if not docs_with_scores and not function_ids_ordered:
-        return ""
+        related_ids = get_related_function_ids(
+            session,
+            extra_ids or function_ids_ordered[:MAX_FUNCTIONS],
+            limit_per_function=2,
+        )
 
-    session = get_session()
-    try:
+        ordered_function_candidates = extra_ids + related_ids + function_ids_ordered
+        seen_function_ids: set[int] = set()
+        function_ids_ordered = []
+        for fid in ordered_function_candidates:
+            if fid in seen_function_ids:
+                continue
+            seen_function_ids.add(fid)
+            function_ids_ordered.append(fid)
+
+        recipe_ids_ordered = _rank_recipe_ids(
+            session,
+            ordered_vector_recipe_ids=recipe_ids_ordered,
+            preferred_function_ids=function_ids_ordered[:MAX_FUNCTIONS],
+            query=query,
+            sound_types=sound_types,
+            max_recipes=MAX_RECIPES,
+        )
+
+        if not docs_with_scores and not function_ids_ordered and not recipe_ids_ordered:
+            return RetrievedContext()
+
         # Hydrate from SQLite, then re-order according to the ordered ID lists.
         functions = _hydrate_functions(session, function_ids_ordered)
         recipes = _hydrate_recipes(session, recipe_ids_ordered)
@@ -424,6 +647,14 @@ def retrieve_relevant_context(
         ordered_presets: List[Preset] = [
             preset_by_id[pid] for pid in preset_ids_ordered if pid in preset_by_id
         ][:MAX_PRESETS]
+
+        related_function_ids: set[int] = set()
+        for recipe in ordered_recipes:
+            related_function_ids.update(_recipe_function_ids(recipe))
+        recipe_function_ids = sorted(related_function_ids)
+        recipe_function_names = {
+            func.id: func.name for func in _hydrate_functions(session, recipe_function_ids)
+        }
 
         context_parts: List[str] = []
         total_len = 0
@@ -454,7 +685,10 @@ def retrieve_relevant_context(
             header = "\n=== Relevant Recipes ==="
             if _append_block(header):
                 for recipe in ordered_recipes:
-                    block = _format_recipe_context(recipe)
+                    block = _format_recipe_context(
+                        recipe,
+                        function_id_to_name=recipe_function_names,
+                    )
                     if not _append_block("\n" + block):
                         break
 
@@ -467,10 +701,31 @@ def retrieve_relevant_context(
                     if not _append_block("\n" + block):
                         break
 
-        return "\n\n".join(context_parts) if context_parts else ""
+        return RetrievedContext(
+            text="\n\n".join(context_parts) if context_parts else "",
+            function_ids=[func.id for func in ordered_functions],
+            recipe_ids=[recipe.id for recipe in ordered_recipes],
+            preset_ids=[preset.id for preset in ordered_presets],
+        )
 
     finally:
         session.close()
+
+
+def retrieve_relevant_context(
+    query: str,
+    k: int = 4,
+    category_filter: Optional[str] = None,
+    extra_function_names: Optional[List[str]] = None,
+    sound_types: Optional[List[str]] = None,
+) -> str:
+    return retrieve_relevant_context_bundle(
+        query,
+        k=k,
+        category_filter=category_filter,
+        extra_function_names=extra_function_names,
+        sound_types=sound_types,
+    ).text
 
 
 def retrieve_context_for_functions(
@@ -597,3 +852,23 @@ def extract_function_names_from_query(query: str) -> List[str]:
             found.append(canonical)
 
     return found
+
+
+def canonicalize_function_names(names: Iterable[str]) -> List[str]:
+    """Map function names or aliases to canonical KB names."""
+    global _FUNCTION_NAME_INDEX, _FUNCTION_NAME_PATTERN
+
+    if _FUNCTION_NAME_INDEX is None:
+        _FUNCTION_NAME_INDEX, _FUNCTION_NAME_PATTERN = _build_function_name_index()
+
+    if not _FUNCTION_NAME_INDEX:
+        return []
+
+    canonical_names: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        canonical = _FUNCTION_NAME_INDEX.get(str(name).lower())
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            canonical_names.append(canonical)
+    return canonical_names

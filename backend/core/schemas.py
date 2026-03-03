@@ -67,6 +67,15 @@ class ChatResponse(BaseModel):
     patch_ops: list[PatchOperation] = Field(default_factory=list)
     patch_stats: PatchStats = Field(default_factory=PatchStats)
     usage: Optional[TokenUsage] = None
+    interaction_id: Optional[int] = None
+
+
+class InteractionFeedbackRequest(BaseModel):
+    status: Literal["accepted", "partial", "rejected"]
+
+
+class InteractionFeedbackResponse(BaseModel):
+    ok: bool = True
 
 
 class StrudelCodeOut(BaseModel):

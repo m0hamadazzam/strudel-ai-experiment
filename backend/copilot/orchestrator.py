@@ -1,317 +1,60 @@
 """
 Copilot orchestration: conditional-prefetch -> generate -> validate -> repair -> patch.
 
-This is the main entry point called by the FastAPI endpoint.
+Main entry point called by the FastAPI endpoint.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import os
-import re
 import time
 from pathlib import Path
 from typing import Generator
 
 from dotenv import load_dotenv
 
-from .context_window import window_conversation_history
-from .database import AIInteraction, Function, get_session
-from .generation import (
+from backend.core.context_window import window_conversation_history
+from backend.core.generation import (
     generate_with_context,
     generate_with_context_stream,
     get_model,
     repair_with_context,
     repair_with_context_stream,
 )
-from .patch_utils import build_patch_operations, summarize_patch_operations
-from .retrieval import (
-    extract_function_names_from_query,
-    get_all_preset_names,
-    get_function_signatures,
-    retrieve_context_for_functions,
-    retrieve_preset_context,
-    retrieve_relevant_context,
-)
-from .routing import (
+from backend.core.routing import (
     detect_sound_types,
     expand_query_with_aliases,
     should_enable_web_search,
     should_prefetch_kb,
 )
-from .schemas import (
+from backend.core.schemas import (
     ChatRequest,
     ChatResponse,
     TokenUsage,
     ValidationResult,
 )
+from backend.patching.patch_utils import build_patch_operations, summarize_patch_operations
+from backend.rag.retrieval import (
+    extract_function_names_from_query,
+    get_all_preset_names,
+    get_function_signatures,
+    retrieve_context_for_functions,
+    retrieve_preset_context,
+    retrieve_preset_context_bundle,
+    retrieve_relevant_context_bundle,
+)
 
-backend_dir = Path(__file__).parent
+from .interactions import _log_interaction
+from .validation import (
+    _get_allowed_function_names,
+    _extract_sound_names_from_code,
+    _validate_function_args,
+    _validate_sound_names,
+    validate_generated_code,
+)
+
+backend_dir = Path(__file__).resolve().parent.parent
 load_dotenv(backend_dir / ".env")
-
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Forbidden patterns (Node / non-Strudel)
-# ---------------------------------------------------------------------------
-
-FORBIDDEN_CODE_PATTERNS = (
-    "require(",
-    "import ",
-    "process.",
-    "__dirname",
-    "module.exports",
-)
-
-# ---------------------------------------------------------------------------
-# Identifier extraction (string-content-safe)
-# ---------------------------------------------------------------------------
-
-_RE_CALL_NAME = re.compile(r"\b([a-zA-Z_$][a-zA-Z0-9_]*)\s*\(")
-_RE_METHOD_NAME = re.compile(r"\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(")
-
-
-def _strip_string_contents(code: str) -> str:
-    """Remove string contents so regex doesn't match tokens inside mini-notation."""
-    code = re.sub(r'"[^"]*"', '""', code)
-    code = re.sub(r"'[^']*'", "''", code)
-    code = re.sub(r"`[^`]*`", "``", code)
-    return code
-
-
-def _extract_called_identifiers(
-    code: str,
-) -> tuple[set[str], set[str]]:
-    """Extract call/method names from code (skips string interiors)."""
-    stripped = _strip_string_contents(code)
-    names = set(_RE_CALL_NAME.findall(stripped))
-    methods = set(_RE_METHOD_NAME.findall(stripped))
-    return names, methods
-
-
-# ---------------------------------------------------------------------------
-# Allowed-names cache (DB function names + synonyms)
-# ---------------------------------------------------------------------------
-
-SAFE_JS_BUILTINS = frozenset({
-    "Math", "parseInt", "parseFloat", "Number", "String",
-    "Array", "Object", "JSON", "console", "Date",
-    "floor", "ceil", "round", "abs", "min", "max",
-    "random", "log", "pow", "sqrt", "sin", "cos",
-    "map", "filter", "reduce", "forEach", "push",
-    "join", "split", "slice", "concat", "includes",
-    "keys", "values", "entries", "from", "isArray",
-    "toString", "valueOf", "toFixed", "length",
-    "set", "get", "has", "delete", "clear", "size",
-})
-
-_ALLOWED_FUNCTION_NAMES_CACHE: set[str] | None = None
-
-
-def _get_allowed_function_names() -> set[str]:
-    """Return set of all function names and synonyms in the KB. Cached."""
-    global _ALLOWED_FUNCTION_NAMES_CACHE
-    if _ALLOWED_FUNCTION_NAMES_CACHE is not None:
-        return _ALLOWED_FUNCTION_NAMES_CACHE
-    session = get_session()
-    try:
-        names: set[str] = set()
-        for row in session.query(Function).all():
-            if row.name:
-                names.add(row.name)
-            if row.synonyms and row.synonyms != "[]":
-                try:
-                    for syn in json.loads(row.synonyms) or []:
-                        if isinstance(syn, str) and syn.strip():
-                            names.add(syn.strip())
-                except (json.JSONDecodeError, TypeError):
-                    pass
-        _ALLOWED_FUNCTION_NAMES_CACHE = names
-        return names
-    finally:
-        session.close()
-
-
-# ---------------------------------------------------------------------------
-# Validator (returns ALL errors, not just first)
-# ---------------------------------------------------------------------------
-
-
-def validate_generated_code(
-    code: str,
-    allowed_names: set[str] | None = None,
-) -> ValidationResult:
-    """Validate generated code. Returns a ValidationResult with all errors."""
-    errors: list[str] = []
-    invalid: list[str] = []
-
-    for pattern in FORBIDDEN_CODE_PATTERNS:
-        if pattern in code:
-            errors.append(f"Disallowed pattern: {pattern}")
-
-    if allowed_names and len(allowed_names) > 0:
-        full_allowed = allowed_names | SAFE_JS_BUILTINS
-        names, methods = _extract_called_identifiers(code)
-        for name in names:
-            if name not in full_allowed:
-                errors.append(f"Unknown function: {name}")
-                invalid.append(name)
-        for method in methods:
-            if method not in full_allowed:
-                errors.append(f"Unknown method: .{method}()")
-                invalid.append(method)
-
-    return ValidationResult(
-        ok=len(errors) == 0,
-        errors=errors,
-        invalid_names=invalid,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Sound / preset name validation
-# ---------------------------------------------------------------------------
-
-_RE_SOUND_STRINGS = re.compile(
-    r"""\b(?:s|sound)\s*\(\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`)"""
-)
-_RE_SOUND_TOKEN = re.compile(r"[a-zA-Z][a-zA-Z0-9_]*")
-
-
-def _extract_sound_names_from_code(code: str) -> set[str]:
-    """Extract sound preset tokens from s("...") / sound("...") patterns."""
-    sounds: set[str] = set()
-    for m in _RE_SOUND_STRINGS.finditer(code):
-        mini_notation = m.group(1) or m.group(2) or m.group(3)
-        if mini_notation:
-            tokens = _RE_SOUND_TOKEN.findall(mini_notation)
-            sounds.update(tokens)
-    return sounds
-
-
-def _validate_sound_names(
-    code: str,
-    valid_presets: set[str],
-) -> tuple[list[str], list[str]]:
-    """Check that every sound token in s("...") exists in the presets table.
-
-    Returns (error_messages, invalid_sound_names).
-    """
-    sounds = _extract_sound_names_from_code(code)
-    errors: list[str] = []
-    invalid: list[str] = []
-    for name in sorted(sounds):
-        if name not in valid_presets:
-            errors.append(f"Unknown sound preset: {name}")
-            invalid.append(name)
-    return errors, invalid
-
-
-# ---------------------------------------------------------------------------
-# Function argument-count validation
-# ---------------------------------------------------------------------------
-
-_JS_KEYWORDS = frozenset({
-    "if", "else", "for", "while", "do", "switch", "case", "break",
-    "continue", "return", "function", "class", "new", "typeof",
-    "instanceof", "void", "delete", "throw", "try", "catch",
-    "finally", "const", "let", "var", "in", "of", "async", "await",
-})
-
-_RE_CALL_SITE = re.compile(r"([a-zA-Z_$][a-zA-Z0-9_]*)\s*\(")
-
-
-def _count_args_at(code: str, open_paren: int) -> int:
-    """Count comma-separated arguments starting at *open_paren*.
-
-    Tracks balanced parens / brackets and skips string contents so that
-    nested calls and mini-notation don't inflate the count.
-    Returns -1 on unmatched parens (truncated code).
-    """
-    depth = 0
-    n_args = 0
-    has_content = False
-    in_string: str | None = None
-    i = open_paren
-
-    while i < len(code):
-        ch = code[i]
-
-        if in_string:
-            if ch == in_string and (i == 0 or code[i - 1] != "\\"):
-                in_string = None
-        elif ch in "\"'`":
-            in_string = ch
-            if depth == 1:
-                has_content = True
-        elif ch in "([{":
-            if ch == "(" and depth == 0:
-                pass
-            elif depth == 1:
-                has_content = True
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-            if depth == 0:
-                return n_args + (1 if has_content else 0)
-        elif ch == "," and depth == 1:
-            n_args += 1
-            has_content = False
-        elif depth == 1 and not ch.isspace():
-            has_content = True
-
-        i += 1
-    return -1
-
-
-def _parse_function_calls(code: str) -> list[tuple[str, int]]:
-    """Extract (function_name, arg_count) for every call site in *code*."""
-    stripped = _strip_string_contents(code)
-    calls: list[tuple[str, int]] = []
-
-    for m in _RE_CALL_SITE.finditer(stripped):
-        name = m.group(1)
-        if name in _JS_KEYWORDS:
-            continue
-        paren_pos = m.end() - 1
-        n_args = _count_args_at(stripped, paren_pos)
-        if n_args >= 0:
-            calls.append((name, n_args))
-    return calls
-
-
-def _validate_function_args(
-    code: str,
-    sig_map: dict[str, tuple[int, int | None, str]],
-) -> tuple[list[str], list[str]]:
-    """Check that each call provides enough arguments.
-
-    Only flags calls where actual_args < min_required_args.
-    Returns (error_messages, function_names_with_errors).
-    """
-    calls = _parse_function_calls(code)
-    errors: list[str] = []
-    flagged: list[str] = []
-    seen: set[str] = set()
-
-    for name, actual in calls:
-        if name not in sig_map:
-            continue
-        min_args, _max_args, hint = sig_map[name]
-        if actual < min_args and name not in seen:
-            seen.add(name)
-            errors.append(
-                f"{name}() called with {actual} arg(s), needs at least {min_args}. "
-                f"Correct signature: {hint}"
-            )
-            flagged.append(name)
-    return errors, flagged
-
-
-# ---------------------------------------------------------------------------
-# User content builder
-# ---------------------------------------------------------------------------
 
 
 def _build_user_content(request: ChatRequest) -> str:
@@ -322,10 +65,6 @@ def _build_user_content(request: ChatRequest) -> str:
         )
     return request.message
 
-
-# ---------------------------------------------------------------------------
-# Token usage helpers
-# ---------------------------------------------------------------------------
 
 _COST_PER_1K = {
     "gpt-4o-mini": (0.00015, 0.0006),
@@ -360,56 +99,6 @@ def _sum_usage(*usages: dict | None) -> TokenUsage:
     )
 
 
-# ---------------------------------------------------------------------------
-# Interaction logging
-# ---------------------------------------------------------------------------
-
-
-def _log_interaction(
-    user_query: str,
-    generated_code: str | None,
-    response_time_ms: int,
-    *,
-    path_taken: str = "unknown",
-    validation_passed_first: bool | None = None,
-    repair_attempted: bool = False,
-    prompt_tokens: int = 0,
-    completion_tokens: int = 0,
-) -> None:
-    session = get_session()
-    try:
-        session.add(
-            AIInteraction(
-                user_query=user_query,
-                generated_code=generated_code,
-                applied=0,
-                response_time_ms=response_time_ms,
-            )
-        )
-        session.commit()
-    except Exception as e:
-        logger.warning("Failed to log AI interaction: %s", e)
-        session.rollback()
-    finally:
-        session.close()
-
-    logger.info(
-        "copilot request: path=%s validation_first_pass=%s repair=%s "
-        "prompt_tokens=%d completion_tokens=%d latency_ms=%d",
-        path_taken,
-        validation_passed_first,
-        repair_attempted,
-        prompt_tokens,
-        completion_tokens,
-        response_time_ms,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Response builders
-# ---------------------------------------------------------------------------
-
-
 def _error_response(request: ChatRequest, explanation: str) -> ChatResponse:
     return ChatResponse(code=request.current_code or "", explanation=explanation)
 
@@ -419,6 +108,7 @@ def _build_success_response(
     parsed,
     usage: TokenUsage,
     *,
+    interaction_id: int | None = None,
     warning: str | None = None,
 ) -> ChatResponse:
     code = parsed.code.strip()
@@ -439,6 +129,7 @@ def _build_success_response(
         patch_ops=patch_ops,
         patch_stats=patch_stats,
         usage=usage,
+        interaction_id=interaction_id,
     )
 
 
@@ -456,11 +147,6 @@ def _status_event(message: str, phase: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
-
 def generate_code(request: ChatRequest) -> ChatResponse:
     """Generate-validate-repair orchestration."""
     if not os.getenv("OPENAI_API_KEY"):
@@ -471,30 +157,33 @@ def generate_code(request: ChatRequest) -> ChatResponse:
     path_taken = "fast"
 
     try:
-        # 1. Window conversation history
         history = window_conversation_history(request.conversation_history)
 
-        # 2. Conditional KB prefetch
+        sound_types, needs_synth = detect_sound_types(request.message)
+
         pre_ctx = ""
+        context_recipe_ids: list[int] = []
         allowed_names = _get_allowed_function_names()
         if should_prefetch_kb(request.message, allowed_names):
             path_taken = "prefetch"
             query = expand_query_with_aliases(request.message)
             extra = extract_function_names_from_query(query)
-            pre_ctx = retrieve_relevant_context(
-                query, k=3, extra_function_names=extra[:3] if extra else None
+            retrieval_bundle = retrieve_relevant_context_bundle(
+                query,
+                k=3,
+                extra_function_names=extra[:3] if extra else None,
+                sound_types=sound_types or None,
             )
+            pre_ctx = retrieval_bundle.text
+            context_recipe_ids = retrieval_bundle.recipe_ids
 
-        # 3. Preset context: detect sound types and inject valid preset names
-        sound_types, needs_synth = detect_sound_types(request.message)
         if sound_types or needs_synth:
-            preset_ctx = retrieve_preset_context(
+            preset_bundle = retrieve_preset_context_bundle(
                 sound_types, include_synths=needs_synth
             )
-            if preset_ctx:
-                pre_ctx = f"{pre_ctx}\n\n{preset_ctx}" if pre_ctx else preset_ctx
+            if preset_bundle.text:
+                pre_ctx = f"{pre_ctx}\n\n{preset_bundle.text}" if pre_ctx else preset_bundle.text
 
-        # 4. Single LLM call (fast path)
         enable_ws = should_enable_web_search(
             request.message, pre_ctx if pre_ctx else None
         )
@@ -515,7 +204,6 @@ def generate_code(request: ChatRequest) -> ChatResponse:
                 "Please try again — this is usually a transient issue.",
             )
 
-        # 5. Validate functions AND sound preset names
         result = validate_generated_code(draft.code, allowed_names)
 
         all_presets = get_all_preset_names()
@@ -546,16 +234,21 @@ def generate_code(request: ChatRequest) -> ChatResponse:
         if result.ok:
             usage = _sum_usage(usage1)
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            _log_interaction(
+            interaction_id = _log_interaction(
                 user_query, draft.code, elapsed_ms,
+                recipe_ids=context_recipe_ids,
                 path_taken=path_taken,
                 validation_passed_first=True,
                 prompt_tokens=usage.input_tokens,
                 completion_tokens=usage.output_tokens,
             )
-            return _build_success_response(request, draft, usage)
+            return _build_success_response(
+                request,
+                draft,
+                usage,
+                interaction_id=interaction_id,
+            )
 
-        # 6. Repair path: build targeted context for invalid names
         path_taken = f"{path_taken}+repair"
 
         invalid_fn_only = [
@@ -593,8 +286,9 @@ def generate_code(request: ChatRequest) -> ChatResponse:
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
         if fixed is None:
-            _log_interaction(
+            interaction_id = _log_interaction(
                 user_query, draft.code, elapsed_ms,
+                recipe_ids=context_recipe_ids,
                 path_taken=path_taken,
                 validation_passed_first=False,
                 repair_attempted=True,
@@ -602,7 +296,11 @@ def generate_code(request: ChatRequest) -> ChatResponse:
                 completion_tokens=total_usage.output_tokens,
             )
             return _build_success_response(
-                request, draft, total_usage, warning="Repair call failed; returning first draft."
+                request,
+                draft,
+                total_usage,
+                interaction_id=interaction_id,
+                warning="Repair call failed; returning first draft.",
             )
 
         result2 = validate_generated_code(fixed.code, allowed_names)
@@ -623,8 +321,9 @@ def generate_code(request: ChatRequest) -> ChatResponse:
                 invalid_names=result2.invalid_names,
             )
 
-        _log_interaction(
+        interaction_id = _log_interaction(
             user_query, fixed.code if result2.ok else draft.code, elapsed_ms,
+            recipe_ids=context_recipe_ids,
             path_taken=path_taken,
             validation_passed_first=False,
             repair_attempted=True,
@@ -633,10 +332,18 @@ def generate_code(request: ChatRequest) -> ChatResponse:
         )
 
         if result2.ok:
-            return _build_success_response(request, fixed, total_usage)
+            return _build_success_response(
+                request,
+                fixed,
+                total_usage,
+                interaction_id=interaction_id,
+            )
 
         return _build_success_response(
-            request, fixed, total_usage,
+            request,
+            fixed,
+            total_usage,
+            interaction_id=interaction_id,
             warning="Some functions or sound presets may not be valid Strudel API.",
         )
 
@@ -661,25 +368,32 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
 
         history = window_conversation_history(request.conversation_history)
 
+        sound_types, needs_synth = detect_sound_types(request.message)
+
         pre_ctx = ""
+        context_recipe_ids: list[int] = []
         allowed_names = _get_allowed_function_names()
         if should_prefetch_kb(request.message, allowed_names):
             path_taken = "prefetch"
             yield _status_event("Loading relevant Strudel reference docs.", "context")
             query = expand_query_with_aliases(request.message)
             extra = extract_function_names_from_query(query)
-            pre_ctx = retrieve_relevant_context(
-                query, k=3, extra_function_names=extra[:3] if extra else None
+            retrieval_bundle = retrieve_relevant_context_bundle(
+                query,
+                k=3,
+                extra_function_names=extra[:3] if extra else None,
+                sound_types=sound_types or None,
             )
+            pre_ctx = retrieval_bundle.text
+            context_recipe_ids = retrieval_bundle.recipe_ids
 
-        sound_types, needs_synth = detect_sound_types(request.message)
         if sound_types or needs_synth:
             yield _status_event("Checking valid sound presets and synth names.", "context")
-            preset_ctx = retrieve_preset_context(
+            preset_bundle = retrieve_preset_context_bundle(
                 sound_types, include_synths=needs_synth
             )
-            if preset_ctx:
-                pre_ctx = f"{pre_ctx}\n\n{preset_ctx}" if pre_ctx else preset_ctx
+            if preset_bundle.text:
+                pre_ctx = f"{pre_ctx}\n\n{preset_bundle.text}" if pre_ctx else preset_bundle.text
 
         enable_ws = should_enable_web_search(
             request.message, pre_ctx if pre_ctx else None
@@ -746,8 +460,9 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
         if result.ok:
             usage = _sum_usage(usage1)
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            _log_interaction(
+            interaction_id = _log_interaction(
                 user_query, draft.code, elapsed_ms,
+                recipe_ids=context_recipe_ids,
                 path_taken=path_taken,
                 validation_passed_first=True,
                 prompt_tokens=usage.input_tokens,
@@ -756,7 +471,14 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
             yield _status_event("Building a patch preview for review.", "final")
             yield {
                 "type": "final",
-                "response": _dump_model(_build_success_response(request, draft, usage)),
+                "response": _dump_model(
+                    _build_success_response(
+                        request,
+                        draft,
+                        usage,
+                        interaction_id=interaction_id,
+                    )
+                ),
             }
             return
 
@@ -801,8 +523,9 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
         if fixed is None:
-            _log_interaction(
+            interaction_id = _log_interaction(
                 user_query, draft.code, elapsed_ms,
+                recipe_ids=context_recipe_ids,
                 path_taken=path_taken,
                 validation_passed_first=False,
                 repair_attempted=True,
@@ -820,6 +543,7 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
                         request,
                         draft,
                         total_usage,
+                        interaction_id=interaction_id,
                         warning="Repair call failed; returning first draft.",
                     )
                 ),
@@ -845,8 +569,9 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
                 invalid_names=result2.invalid_names,
             )
 
-        _log_interaction(
+        interaction_id = _log_interaction(
             user_query, fixed.code if result2.ok else draft.code, elapsed_ms,
+            recipe_ids=context_recipe_ids,
             path_taken=path_taken,
             validation_passed_first=False,
             repair_attempted=True,
@@ -858,7 +583,14 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
             yield _status_event("Repair succeeded. Building a patch preview.", "final")
             yield {
                 "type": "final",
-                "response": _dump_model(_build_success_response(request, fixed, total_usage)),
+                "response": _dump_model(
+                    _build_success_response(
+                        request,
+                        fixed,
+                        total_usage,
+                        interaction_id=interaction_id,
+                    )
+                ),
             }
             return
 
@@ -873,6 +605,7 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
                     request,
                     fixed,
                     total_usage,
+                    interaction_id=interaction_id,
                     warning="Some functions or sound presets may not be valid Strudel API.",
                 )
             ),

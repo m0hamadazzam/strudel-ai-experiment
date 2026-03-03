@@ -6,7 +6,7 @@ This script creates the database file and all necessary tables.
 Run this once to set up the database before using the AI copilot.
 """
 
-from database import get_database_path, init_database
+from .session import get_database_path, init_database
 
 
 def main():

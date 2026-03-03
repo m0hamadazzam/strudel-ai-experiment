@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Generator, Optional
 
 from dotenv import load_dotenv
@@ -23,8 +24,8 @@ from pydantic import ValidationError
 from .prompts import build_prompt_messages, get_static_system_prompt
 from .schemas import StrudelCodeOut
 
-_backend_dir = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(_backend_dir, ".env"))
+_backend_dir = Path(__file__).resolve().parent.parent
+load_dotenv(_backend_dir / ".env")
 
 logger = logging.getLogger(__name__)
 
