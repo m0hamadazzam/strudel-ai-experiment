@@ -702,9 +702,9 @@ export default function AICopilotSidebar({ context }) {
                             activatePatchMessage={activatePatchMessage}
                             handleAllHunksDecision={handleAllHunksDecision}
                             handleHunkDecision={handleHunkDecision}
-                            isLoading={isLoading}
-                            liveAssistant={liveAssistant}
                         />
+
+                        {isLoading && <CopilotThinkingIndicator liveAssistant={liveAssistant} />}
 
                         <CopilotInput
                             input={input}
