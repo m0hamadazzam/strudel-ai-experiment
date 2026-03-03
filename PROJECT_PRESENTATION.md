@@ -161,7 +161,7 @@ This project is a **fork of Strudel for local experimentation only**. The fork a
    - Feedback endpoint updates `user_feedback` and `applied`, and triggers recomputation of usage/success stats for functions, presets, and recipes.
 
 **Streaming variant:**  
-`generate_code_stream()` in `copilot/orchestrator.py` does the same pipeline and yields NDJSON events so the UI can show “Preparing request”, “Loading relevant Strudel reference docs”, “Generating the first draft”, “Validating …”, “Building a patch preview”, and finally the `final` payload.
+`generate_code_stream()` in `copilot/orchestrator.py` does the same pipeline and yields NDJSON events so the UI can show “Preparing request”, “Loading relevant Strudel reference docs”, “Planning next moves”, “Validating …”, “Building a patch preview”, and finally the `final` payload.
 
 ---
 
@@ -213,7 +213,7 @@ This project is a **fork of Strudel for local experimentation only**. The fork a
 ### 7.2 Frontend
 
 - **Sidebar instead of inline chat:** Keeps the REPL and the copilot visually separate; the user always sees their code and the conversation side by side.
-- **Streaming:** NDJSON stream gives quick status updates (“Loading relevant Strudel reference docs”, “Generating the first draft”) and a single `final` payload. Better perceived performance and transparency.
+- **Streaming:** NDJSON stream gives quick status updates (“Loading relevant Strudel reference docs”, “Planning next moves”) and a single `final` payload. Better perceived performance and transparency.
 - **Editor–sidebar contract:** The editor exposes `setPatchReview`, `acceptPatchHunk`, `rejectPatchHunk`, `clearPatchReview` and optionally emits `PATCH_ACTION_EVENT`. The sidebar stays agnostic of the exact editor implementation as long as this contract is fulfilled.
 - **Base-code check:** Prevents applying patches when the document has changed since the response was generated, avoiding silent corruption.
 

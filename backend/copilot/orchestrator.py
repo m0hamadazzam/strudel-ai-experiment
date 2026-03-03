@@ -406,7 +406,7 @@ def generate_code_stream(request: ChatRequest) -> Generator[dict, None, None]:
 
         user_content = _build_user_content(request)
 
-        yield _status_event("Generating the first draft.", "generation")
+        yield _status_event("Planning next moves.", "generation")
         draft, usage1 = yield from generate_with_context_stream(
             user_content=user_content,
             kb_context=pre_ctx,
