@@ -118,7 +118,7 @@ python -m backend.indexing --force
 To verify the vector store has data:
 
 ```python
-from backend.vector_store import get_vector_store
+from backend.rag.vector_store import get_vector_store
 
 vs = get_vector_store()
 # Check collection count (if ChromaDB supports it)
