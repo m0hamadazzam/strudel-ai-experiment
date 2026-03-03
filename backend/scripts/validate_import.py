@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Validate the imported functions and presets against the checklist in IMPORT_STRATEGY.md
+Validate imported functions, presets, and recipes against expected sources.
+
+See backend/README.md (Data import strategy) for what is imported and how.
 """
 
 import json
