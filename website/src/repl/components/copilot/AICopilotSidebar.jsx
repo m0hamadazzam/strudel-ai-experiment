@@ -4,7 +4,6 @@ import { setAICopilotSidebarWidth, setIsAICopilotSidebarOpened, useSettings } fr
 import { useEffect, useRef, useState } from 'react';
 import CopilotInput from './CopilotInput';
 import CopilotMessageList from './CopilotMessageList';
-import CopilotThinkingIndicator from './CopilotThinkingIndicator';
 import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, summarizeHunks, buildHunkPreview, formatTokens, formatCost } from './copilotShared';
 
 const PATCH_ACTION_EVENT = 'strudel-ai-patch-hunk-action';
@@ -683,9 +682,9 @@ export default function AICopilotSidebar({ context }) {
                             activatePatchMessage={activatePatchMessage}
                             handleAllHunksDecision={handleAllHunksDecision}
                             handleHunkDecision={handleHunkDecision}
+                            isLoading={isLoading}
+                            liveAssistant={liveAssistant}
                         />
-
-                        {isLoading && <CopilotThinkingIndicator liveAssistant={liveAssistant} />}
 
                         <CopilotInput
                             input={input}
