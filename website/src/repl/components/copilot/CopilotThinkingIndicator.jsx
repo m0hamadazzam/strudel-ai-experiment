@@ -1,8 +1,13 @@
 import React from 'react';
+import { sanitizeReasoningText } from './copilotShared';
 
 const THINKING_SCAN_ANIMATION = 'strudelThinkingScan 1.25s ease-in-out infinite';
 
 export default function CopilotThinkingIndicator({ liveAssistant }) {
+    const displayText = liveAssistant?.reasoning?.trim()
+        ? sanitizeReasoningText(liveAssistant.reasoning)
+        : (liveAssistant?.phase || 'Thinking through the request.');
+
     return (
         <div className="flex justify-start">
             <div className="max-w-[85%] rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm space-y-3">
@@ -26,9 +31,7 @@ export default function CopilotThinkingIndicator({ liveAssistant }) {
                 </div>
 
                 <div className="whitespace-pre-wrap text-sm text-foreground/90">
-                    {liveAssistant?.reasoning?.trim()
-                        ? liveAssistant.reasoning
-                        : (liveAssistant?.phase || 'Thinking through the request.')}
+                    {displayText}
                 </div>
             </div>
         </div>

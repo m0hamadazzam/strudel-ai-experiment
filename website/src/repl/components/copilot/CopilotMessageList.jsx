@@ -1,5 +1,5 @@
 import React from 'react';
-import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, buildHunkPreview, summarizeHunks } from './copilotShared';
+import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, buildHunkPreview, summarizeHunks, formatTokens, formatCost } from './copilotShared';
 import CopilotThinkingIndicator from './CopilotThinkingIndicator';
 
 export default function CopilotMessageList({
@@ -165,18 +165,4 @@ export default function CopilotMessageList({
             )}
         </div>
     );
-}
-
-function formatTokens(n) {
-    if (n == null || typeof n !== 'number' || Number.isNaN(n)) return '0';
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-    return String(n);
-}
-
-function formatCost(cost) {
-    if (cost == null || typeof cost !== 'number' || Number.isNaN(cost) || cost < 0) return null;
-    if (cost >= 0.01) return `~$${cost.toFixed(2)}`;
-    if (cost > 0) return `~$${cost.toFixed(4)}`;
-    return '~$0.00';
 }

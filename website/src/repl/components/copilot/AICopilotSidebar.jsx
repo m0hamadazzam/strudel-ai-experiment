@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import CopilotInput from './CopilotInput';
 import CopilotMessageList from './CopilotMessageList';
 import CopilotThinkingIndicator from './CopilotThinkingIndicator';
-import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, summarizeHunks, buildHunkPreview } from './copilotShared';
+import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, summarizeHunks, buildHunkPreview, formatTokens, formatCost } from './copilotShared';
 
 const PATCH_ACTION_EVENT = 'strudel-ai-patch-hunk-action';
 const COPILOT_API_BASE = import.meta.env.PUBLIC_COPILOT_API_BASE || 'http://localhost:8000';
@@ -24,25 +24,6 @@ function buildPatchHunks(messageId, patchOps) {
         newText: op.new_text || '',
         status: HUNK_PENDING,
     }));
-}
-
-function formatTokens(n) {
-    if (n == null || typeof n !== 'number' || Number.isNaN(n)) return '0';
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-    return String(n);
-}
-
-function formatCost(cost) {
-    if (cost == null || typeof cost !== 'number' || Number.isNaN(cost) || cost < 0) return null;
-    if (cost >= 0.01) return `~$${cost.toFixed(2)}`;
-    if (cost > 0) return `~$${cost.toFixed(4)}`;
-    return '~$0.00';
-}
-
-function sanitizeReasoningText(text) {
-    if (!text) return '';
-    return text.replace(/\*\*/g, '');
 }
 
 async function readNdjsonStream(response, onEvent) {
