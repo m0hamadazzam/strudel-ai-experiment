@@ -51,34 +51,6 @@ def build_patch_operations(base_code: str, target_code: str) -> list[PatchOperat
     return ops
 
 
-def apply_patch_operations(base_code: str, patch_ops: list[PatchOperation]) -> str:
-    """
-    Apply patch operations against base_code and return updated text.
-
-    Raises ValueError if operations are invalid for the provided base_code.
-    """
-    if not patch_ops:
-        return base_code
-
-    result: list[str] = []
-    cursor = 0
-
-    for op in sorted(patch_ops, key=lambda x: x.start):
-        if op.start < cursor or op.end < op.start:
-            raise ValueError("Patch operations overlap or are out of order")
-        if op.end > len(base_code):
-            raise ValueError("Patch operation exceeds base code bounds")
-        if base_code[op.start:op.end] != op.old_text:
-            raise ValueError("Patch operation old_text does not match base code")
-
-        result.append(base_code[cursor:op.start])
-        result.append(op.new_text)
-        cursor = op.end
-
-    result.append(base_code[cursor:])
-    return "".join(result)
-
-
 def summarize_patch_operations(patch_ops: list[PatchOperation]) -> PatchStats:
     additions = sum(_line_count(op.new_text) for op in patch_ops)
     deletions = sum(_line_count(op.old_text) for op in patch_ops)
