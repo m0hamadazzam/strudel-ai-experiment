@@ -6,12 +6,16 @@ from backend.core.schemas import PatchOperation, PatchStats
 
 
 def _line_count(text: str) -> int:
+    """Return the number of logical lines in a text block."""
     if not text:
         return 0
     return text.count("\n") + (0 if text.endswith("\n") else 1)
 
 
-def build_patch_operations(base_code: str, target_code: str) -> list[PatchOperation]:
+def build_patch_operations(
+    base_code: str,
+    target_code: str,
+) -> list[PatchOperation]:
     """
     Build minimal line-based patch operations from base_code -> target_code.
 

@@ -87,18 +87,21 @@ def _group_ids_by_type(
 
 
 def _hydrate_functions(session, ids: Iterable[int]) -> List[Function]:
+    """Fetch Function rows for the given IDs, preserving the ID order."""
     if not ids:
         return []
     return list(session.query(Function).filter(Function.id.in_(list(ids))).all())
 
 
 def _hydrate_recipes(session, ids: Iterable[int]) -> List[Recipe]:
+    """Fetch Recipe rows for the given IDs, preserving the ID order."""
     if not ids:
         return []
     return list(session.query(Recipe).filter(Recipe.id.in_(list(ids))).all())
 
 
 def _hydrate_presets(session, ids: Iterable[int]) -> List[Preset]:
+    """Fetch Preset rows for the given IDs, preserving the ID order."""
     if not ids:
         return []
     return list(session.query(Preset).filter(Preset.id.in_(list(ids))).all())
@@ -181,6 +184,7 @@ _INTERMEDIATE_HINTS = {"intermediate"}
 
 
 def _parse_json_list(raw: str | None) -> list:
+    """Parse a JSON list from text, returning an empty list on failure."""
     if not raw or raw in ("[]", "{}", "null"):
         return []
     try:
@@ -191,6 +195,7 @@ def _parse_json_list(raw: str | None) -> list:
 
 
 def _recipe_function_ids(recipe: Recipe) -> set[int]:
+    """Return the set of function IDs linked to a recipe via related_functions."""
     ids: set[int] = set()
     for value in _parse_json_list(recipe.related_functions):
         try:
@@ -201,6 +206,7 @@ def _recipe_function_ids(recipe: Recipe) -> set[int]:
 
 
 def _query_tokens(text: str) -> set[str]:
+    """Tokenize a query string into lowercased, stopword-filtered keywords."""
     tokens = {
         token
         for token in re.findall(r"\b[a-z][a-z0-9_+-]{2,}\b", text.lower())
@@ -210,6 +216,7 @@ def _query_tokens(text: str) -> set[str]:
 
 
 def _query_difficulty(text: str) -> str | None:
+    """Infer requested difficulty level from query keywords, if any."""
     tokens = _query_tokens(text)
     if tokens & _BEGINNER_HINTS:
         return "beginner"
@@ -229,6 +236,7 @@ def _score_recipe(
     difficulty_hint: str | None,
     sound_types: list[str] | None,
 ) -> float:
+    """Compute a relevance score for a recipe given vector and lexical signals."""
     score = 0.0
 
     if recipe.id in vector_rank:
@@ -276,6 +284,7 @@ def _rank_recipe_ids(
     sound_types: list[str] | None,
     max_recipes: int,
 ) -> list[int]:
+    """Return top recipe IDs ranked by combined vector and heuristic scores."""
     vector_rank = {
         recipe_id: rank for rank, recipe_id in enumerate(ordered_vector_recipe_ids)
     }
@@ -306,6 +315,7 @@ def _format_recipe_context(
     *,
     function_id_to_name: dict[int, str] | None = None,
 ) -> str:
+    """Render a compact, single-recipe context block for inclusion in prompts."""
     header = f"Recipe: {recipe.title}"
     if recipe.difficulty:
         header += f" [{recipe.difficulty}]"
@@ -329,6 +339,7 @@ def _format_recipe_context(
 
 
 def _format_preset_context(preset: Preset) -> str:
+    """Render a compact, single-preset context block for inclusion in prompts."""
     header = f"Preset: {preset.name}"
     if preset.description:
         header += f" -- {preset.description}"

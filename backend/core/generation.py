@@ -56,12 +56,14 @@ def get_model() -> str:
 
 
 def _prompt_cache_key(kind: str) -> str:
+    """Build a stable prompt cache key for a given call type and model."""
     raw = f"{get_model()}:{kind}:v1"
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
     return f"strudel:{digest}"
 
 
 def _extract_usage(resp) -> dict | None:
+    """Normalize token usage stats from a Responses API result into a dict."""
     u = getattr(resp, "usage", None)
     if u is None:
         return None

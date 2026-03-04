@@ -10,6 +10,7 @@ from .session import get_database_path, init_database
 
 
 def main():
+    """CLI entry point for creating or recreating the KB database."""
     db_path = get_database_path()
 
     if db_path.exists():
