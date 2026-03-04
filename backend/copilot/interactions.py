@@ -24,6 +24,7 @@ def _build_interaction_metadata(
     *,
     recipe_ids: list[int] | None = None,
 ) -> str:
+    """Encode lightweight interaction metadata (functions, presets, recipes) as JSON."""
     metadata = {
         "functions": _extract_canonical_function_names_from_code(generated_code or ""),
         "presets": sorted(_extract_sound_names_from_code(generated_code or "")),
@@ -33,6 +34,7 @@ def _build_interaction_metadata(
 
 
 def _parse_interaction_metadata(raw: str | None) -> dict:
+    """Parse metadata JSON from the DB, returning a dict or an empty mapping."""
     if not raw:
         return {}
     try:
@@ -43,6 +45,7 @@ def _parse_interaction_metadata(raw: str | None) -> dict:
 
 
 def _success_weight(status: str | None) -> float:
+    """Return a numeric weight representing how successful an interaction was."""
     if status == "accepted":
         return 1.0
     if status == "partial":
@@ -115,6 +118,7 @@ def record_interaction_feedback(
     *,
     status: str,
 ) -> InteractionFeedbackResponse:
+    """Store user feedback for an interaction and refresh aggregate usage stats."""
     session = get_session()
     try:
         interaction = session.get(AIInteraction, interaction_id)
@@ -146,6 +150,7 @@ def _log_interaction(
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
 ) -> int | None:
+    """Insert an AIInteraction row and emit a structured log message."""
     session = get_session()
     interaction_id: int | None = None
     try:

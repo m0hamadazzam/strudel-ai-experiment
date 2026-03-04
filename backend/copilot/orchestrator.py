@@ -58,6 +58,7 @@ load_dotenv(backend_dir / ".env")
 
 
 def _build_user_content(request: ChatRequest) -> str:
+    """Format the chat request into a single string for the language model."""
     if request.current_code:
         return (
             f"Current code:\n{request.current_code}\n\n"
@@ -73,6 +74,7 @@ _COST_PER_1K = {
 
 
 def _estimate_cost_usd(input_tokens: int, output_tokens: int) -> float | None:
+    """Estimate dollar cost for a model call given input and output token counts."""
     model = get_model()
     if model not in _COST_PER_1K:
         return None
@@ -81,7 +83,7 @@ def _estimate_cost_usd(input_tokens: int, output_tokens: int) -> float | None:
 
 
 def _sum_usage(*usages: dict | None) -> TokenUsage:
-    """Combine one or more usage dicts into a single TokenUsage."""
+    """Combine one or more raw usage dicts into a single `TokenUsage` instance."""
     input_total = 0
     output_total = 0
     for u in usages:
@@ -100,6 +102,7 @@ def _sum_usage(*usages: dict | None) -> TokenUsage:
 
 
 def _error_response(request: ChatRequest, explanation: str) -> ChatResponse:
+    """Build a `ChatResponse` that returns the original code with an error message."""
     return ChatResponse(code=request.current_code or "", explanation=explanation)
 
 
@@ -134,12 +137,14 @@ def _build_success_response(
 
 
 def _dump_model(model) -> dict:
+    """Return a plain dict from a Pydantic model or similar object."""
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
 
 
 def _status_event(message: str, phase: str) -> dict:
+    """Small helper to build a streaming status event payload."""
     return {
         "type": "status",
         "phase": phase,

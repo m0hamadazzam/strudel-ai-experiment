@@ -33,7 +33,7 @@ _RE_METHOD_NAME = re.compile(r"\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\(")
 
 
 def _strip_string_contents(code: str) -> str:
-    """Remove string contents so regex doesn't match tokens inside mini-notation."""
+    """Blank out string literal contents so regexes do not match tokens inside them."""
     code = re.sub(r'"[^"]*"', '""', code)
     code = re.sub(r"'[^']*'", "''", code)
     code = re.sub(r"`[^`]*`", "``", code)
@@ -43,7 +43,7 @@ def _strip_string_contents(code: str) -> str:
 def _extract_called_identifiers(
     code: str,
 ) -> tuple[set[str], set[str]]:
-    """Extract call/method names from code (skips string interiors)."""
+    """Extract function and method names from code, skipping anything inside strings."""
     stripped = _strip_string_contents(code)
     names = set(_RE_CALL_NAME.findall(stripped))
     methods = set(_RE_METHOD_NAME.findall(stripped))
@@ -70,7 +70,7 @@ _ALLOWED_FUNCTION_NAMES_CACHE: set[str] | None = None
 
 
 def _get_allowed_function_names() -> set[str]:
-    """Return set of all function names and synonyms in the KB. Cached."""
+    """Return the cached set of all known Strudel function names and synonyms."""
     global _ALLOWED_FUNCTION_NAMES_CACHE
     if _ALLOWED_FUNCTION_NAMES_CACHE is not None:
         return _ALLOWED_FUNCTION_NAMES_CACHE
@@ -102,7 +102,7 @@ def validate_generated_code(
     code: str,
     allowed_names: set[str] | None = None,
 ) -> ValidationResult:
-    """Validate generated code. Returns a ValidationResult with all errors."""
+    """Validate generated code and return a `ValidationResult` containing all errors."""
     errors: list[str] = []
     invalid: list[str] = []
 
@@ -140,7 +140,7 @@ _RE_SOUND_TOKEN = re.compile(r"[a-zA-Z][a-zA-Z0-9_]*")
 
 
 def _extract_sound_names_from_code(code: str) -> set[str]:
-    """Extract sound preset tokens from s("...") / sound("...") patterns."""
+    """Extract sound preset tokens from ``s("...")`` / ``sound("...")`` call patterns."""
     sounds: set[str] = set()
     for m in _RE_SOUND_STRINGS.finditer(code):
         mini_notation = m.group(1) or m.group(2) or m.group(3)
@@ -275,5 +275,6 @@ def _validate_function_args(
 
 
 def _extract_canonical_function_names_from_code(code: str) -> list[str]:
+    """Return canonical Strudel function names inferred from a code snippet."""
     names, methods = _extract_called_identifiers(code)
     return canonicalize_function_names(sorted(names | methods))
