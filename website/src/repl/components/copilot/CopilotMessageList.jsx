@@ -2,6 +2,12 @@ import React from 'react';
 import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, buildHunkPreview, summarizeHunks, formatTokens, formatCost } from './copilotShared';
 import CopilotThinkingIndicator from './CopilotThinkingIndicator';
 
+const EMPTY_HINTS = [
+    'Add a simple drum pattern',
+    'Create a dancy Techno beat',
+    'Do something experimental',
+];
+
 export default function CopilotMessageList({
     messages,
     activePatchMessageId,
@@ -11,8 +17,31 @@ export default function CopilotMessageList({
     isLoading,
     liveAssistant,
 }) {
+    const isEmpty = messages.length === 0 && !isLoading;
+
     return (
-        <div className="mb-3 space-y-2 flex-1 overflow-auto">
+        <div className="mb-3 space-y-2 flex-1 overflow-auto flex flex-col">
+            {isEmpty && (
+                <div className="flex-1 flex items-center justify-center min-h-[10rem] px-4">
+                    <div className="w-full max-w-[85%] rounded-xl border border-white/10 bg-white/[0.03] px-5 py-6 text-left space-y-4">
+                        <div className="space-y-1">
+                            <p className="font-bold mb-4" style={{ color: 'var(--variable, #c792ea)' }}>Let&apos;s get it started 🔊</p>
+
+                            <p className="text-foreground/60 text-sm">Describe a pattern, an effect, or an idea. Try:</p>
+                        </div>
+                        <div className="flex flex-col gap-2 pt-1">
+                            {EMPTY_HINTS.map((hint) => (
+                                <span
+                                    key={hint}
+                                    className="w-full rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-foreground/70 text-center"
+                                >
+                                    {hint}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
             {messages.map((msg) => {
                 const isUser = msg.role === 'user';
                 const hasHunks = Array.isArray(msg.hunks) && msg.hunks.length > 0;
