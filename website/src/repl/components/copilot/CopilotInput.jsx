@@ -1,5 +1,20 @@
 import React from 'react';
 
+/**
+ * Multiline text input for sending prompts to the AI Copilot.
+ *
+ * This component keeps the layout concerns (auto‑resizing, send button, disabled
+ * state) separate from business logic, which is handled by the parent sidebar.
+ *
+ * @param {object} props
+ * @param {string} props.input - Current value of the prompt textarea.
+ * @param {boolean} props.isLoading - Whether a request is currently in flight.
+ * @param {string} props.placeholder - Short hint text shown when the input is empty.
+ * @param {React.RefObject<HTMLTextAreaElement>} props.textareaRef - Ref used for auto‑resizing logic.
+ * @param {(event: React.ChangeEvent<HTMLTextAreaElement>) => void} props.onChange - Change handler for the textarea.
+ * @param {(event: React.KeyboardEvent<HTMLTextAreaElement>) => void} props.onKeyDown - Key handler, typically to submit on Enter.
+ * @param {() => void} props.onSend - Callback invoked when the user presses the send button.
+ */
 export default function CopilotInput({
     input,
     isLoading,

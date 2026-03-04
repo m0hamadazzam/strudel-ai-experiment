@@ -3,6 +3,16 @@ import { sanitizeReasoningText } from './copilotShared';
 
 const THINKING_SCAN_ANIMATION = 'strudelThinkingScan 1.25s ease-in-out infinite';
 
+/**
+ * Small status bubble shown while the Copilot is processing a request.
+ *
+ * It streams and displays the assistant's current reasoning if available, or
+ * falls back to a short phase description. A subtle progress scan animation
+ * communicates that work is ongoing.
+ *
+ * @param {{ liveAssistant: { phase?: string, reasoning?: string, isWebSearching?: boolean } | null }} props
+ * Current live assistant state from the sidebar.
+ */
 export default function CopilotThinkingIndicator({ liveAssistant }) {
     const displayText = liveAssistant?.reasoning?.trim()
         ? sanitizeReasoningText(liveAssistant.reasoning)

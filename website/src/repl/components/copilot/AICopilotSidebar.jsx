@@ -4,15 +4,38 @@ import { setAICopilotSidebarWidth, setIsAICopilotSidebarOpened, useSettings } fr
 import { useEffect, useRef, useState } from 'react';
 import CopilotInput from './CopilotInput';
 import CopilotMessageList from './CopilotMessageList';
-import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, summarizeHunks, buildHunkPreview, formatTokens, formatCost } from './copilotShared';
+import {
+    HUNK_ACCEPTED,
+    HUNK_PENDING,
+    HUNK_REJECTED,
+    summarizeHunks,
+    buildHunkPreview,
+    formatTokens,
+    formatCost,
+} from './copilotShared';
 
 const PATCH_ACTION_EVENT = 'strudel-ai-patch-hunk-action';
 const COPILOT_API_BASE = import.meta.env.PUBLIC_COPILOT_API_BASE || 'http://localhost:8000';
 
+/**
+ * Builds an absolute URL for a Copilot backend endpoint, honoring the
+ * configured `PUBLIC_COPILOT_API_BASE` when present.
+ *
+ * @param {string} path - Relative API path beginning with `/api/copilot/...`.
+ * @returns {string} Fully qualified URL for the Copilot service.
+ */
 function copilotApiUrl(path) {
     return `${COPILOT_API_BASE}${path}`;
 }
 
+/**
+ * Converts a list of low‑level patch operations from the backend into UI‑ready
+ * hunk objects that can be reviewed and applied in the editor.
+ *
+ * @param {string} messageId - Identifier of the assistant message that owns the hunks.
+ * @param {Array<object>} patchOps - Raw patch operations returned by the backend.
+ * @returns {Array<object>} Normalized hunk descriptors with status and IDs.
+ */
 function buildPatchHunks(messageId, patchOps) {
     return (patchOps || []).map((op, index) => ({
         id: `${messageId}-hunk-${index + 1}`,
@@ -25,6 +48,13 @@ function buildPatchHunks(messageId, patchOps) {
     }));
 }
 
+/**
+ * Incrementally reads an NDJSON streaming HTTP response and invokes a callback
+ * for each parsed event object.
+ *
+ * @param {Response} response - Fetch response whose body is an NDJSON stream.
+ * @param {(event: unknown) => void} onEvent - Handler invoked once per decoded line.
+ */
 async function readNdjsonStream(response, onEvent) {
     const reader = response.body?.getReader();
     if (!reader) {
@@ -61,6 +91,12 @@ async function readNdjsonStream(response, onEvent) {
     }
 }
 
+/**
+ * Locates the most recent message that still has at least one pending hunk.
+ *
+ * @param {Array<{ hunks?: Array<{ status: string }> }>} messages - Full message history.
+ * @returns {object | null} The latest message with pending hunks, or `null`.
+ */
 function findLatestPendingPatchMessage(messages) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
         const message = messages[i];
@@ -71,6 +107,15 @@ function findLatestPendingPatchMessage(messages) {
     return null;
 }
 
+/**
+ * Returns a new message object with the status of a single hunk updated and the
+ * derived approval flags (`needsApproval`, `applied`, `discarded`) recalculated.
+ *
+ * @param {object} message - Original message containing hunks.
+ * @param {string} hunkId - Identifier of the hunk being updated.
+ * @param {string} nextStatus - New status (`pending`, `accepted`, or `rejected`).
+ * @returns {object} Updated message instance.
+ */
 function updateMessageAfterHunkDecision(message, hunkId, nextStatus) {
     if (!Array.isArray(message.hunks)) {
         return message;
@@ -99,6 +144,17 @@ function updateMessageAfterHunkDecision(message, hunkId, nextStatus) {
     };
 }
 
+/**
+ * Right‑hand AI Copilot sidebar that orchestrates chatting with the backend,
+ * streaming responses, and coordinating code patch review with the editor.
+ *
+ * This component owns the Copilot conversation state and passes focused pieces
+ * to presentational children, while handling network requests and feedback
+ * reporting internally.
+ *
+ * @param {{ context: { editorRef?: React.RefObject<any>, activeCode?: string } }} props
+ * Host REPL context, including an editor instance capable of applying patches.
+ */
 export default function AICopilotSidebar({ context }) {
     const settings = useSettings();
     const { isAICopilotSidebarOpen, aiCopilotSidebarWidth } = settings;

@@ -1,5 +1,13 @@
 import React from 'react';
-import { HUNK_ACCEPTED, HUNK_PENDING, HUNK_REJECTED, buildHunkPreview, summarizeHunks, formatTokens, formatCost } from './copilotShared';
+import {
+    HUNK_ACCEPTED,
+    HUNK_PENDING,
+    HUNK_REJECTED,
+    buildHunkPreview,
+    summarizeHunks,
+    formatTokens,
+    formatCost,
+} from './copilotShared';
 import CopilotThinkingIndicator from './CopilotThinkingIndicator';
 
 const EMPTY_HINTS = [
@@ -8,6 +16,22 @@ const EMPTY_HINTS = [
     'Do something experimental',
 ];
 
+/**
+ * Renders the conversational history between the user and the AI Copilot,
+ * including patch review controls for messages that propose code edits.
+ *
+ * Assistant messages that contain hunks are annotated with small usage and
+ * patch statistics, and expose per‑hunk and bulk accept/reject actions.
+ *
+ * @param {object} props
+ * @param {Array<object>} props.messages - Ordered list of chat messages to display.
+ * @param {string | null} props.activePatchMessageId - Identifier of the message whose hunks are currently shown in the editor.
+ * @param {(messageId: string) => void} props.activatePatchMessage - Callback to focus a message's hunks in the editor.
+ * @param {(messageId: string, action: 'accept' | 'reject') => void} props.handleAllHunksDecision - Applies an action to all pending hunks in a message.
+ * @param {(messageId: string, hunkId: string, action: 'accept' | 'reject') => void} props.handleHunkDecision - Applies an action to a single hunk.
+ * @param {boolean} props.isLoading - Whether the assistant is currently generating a response.
+ * @param {{ phase?: string, reasoning?: string, isWebSearching?: boolean } | null} props.liveAssistant - Live reasoning state for the currently running request.
+ */
 export default function CopilotMessageList({
     messages,
     activePatchMessageId,
