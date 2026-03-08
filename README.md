@@ -34,7 +34,7 @@ Screenshot: the REPL with the AI Copilot sidebar. You describe what you want (e.
 
 Short demo: asking the copilot for a pattern and reviewing the suggested code.
 
-<video src="./strudel-recording.mov" controls width="700"></video>
+<video src="./strudel-rec.mp4" controls width="700"></video>
 
 *In-editor preview may not show the video; [open the video file](./strudel-recording.mov) directly, or view this README on GitHub to see both.*
 
