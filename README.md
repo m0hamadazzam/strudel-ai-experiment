@@ -26,6 +26,20 @@ The AI functionality is intentionally kept **separate from the original Strudel 
 
 ---
 
+## See it in action
+
+Screenshot: the REPL with the AI Copilot sidebar. You describe what you want (e.g. “create a techno beat with four-on-the-floor kick…”), the copilot suggests Strudel code, and you accept or reject changes per hunk in the editor or in the sidebar.
+
+![Strudel REPL with AI Copilot sidebar](./website/public/img/strudel-AI.png)
+
+Short demo: asking the copilot for a pattern and reviewing the suggested code.
+
+<video src="./strudel-recording.mov" controls width="700"></video>
+
+*In-editor preview may not show the video; [open the video file](./strudel-recording.mov) directly, or view this README on GitHub to see both.*
+
+---
+
 ## Project Goals
 
 The goal of this project is to explore:
@@ -49,7 +63,7 @@ The project follows a clean separation of concerns:
 - Reads and updates the Strudel code editor
 - Does **not** modify Strudel’s core musical engine
 
-### Backend (planned): (Python – FastAPI)
+### Backend (Python – FastAPI)
 - Hosts the AI “copilot” logic
 - Handles:
   - prompt orchestration
